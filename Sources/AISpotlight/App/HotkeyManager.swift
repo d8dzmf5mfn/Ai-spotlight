@@ -31,11 +31,15 @@ final class HotkeyManager {
         let hotKeyID = EventHotKeyID(signature: signature, id: 1)
 
         // Install event handler that routes hotkey presses back to us.
+        // Use GetEventDispatcherTarget() (not GetApplicationEventTarget) — the
+        // dispatcher is where Carbon hotkey events are actually routed to.
+        // Using the application target silently drops events on macOS 14+.
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
                                   eventKind: UInt32(kEventHotKeyPressed))
         let selfPtr = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+        let target = GetEventDispatcherTarget()
         InstallEventHandler(
-            GetApplicationEventTarget(),
+            target,
             { _, eventRef, userData in
                 guard let userData = userData else { return noErr }
                 let mgr = Unmanaged<HotkeyManager>.fromOpaque(userData).takeUnretainedValue()
@@ -50,6 +54,7 @@ final class HotkeyManager {
                     &receivedID
                 )
                 if err == noErr && receivedID.signature == 0x41495053 && receivedID.id == 1 {
+                    HotkeyManager.log("handler: hotkey pressed, dispatching to toggle")
                     DispatchQueue.main.async { mgr.onToggle() }
                 }
                 return noErr
@@ -59,12 +64,13 @@ final class HotkeyManager {
             selfPtr,
             &eventHandler
         )
+        HotkeyManager.log("InstallEventHandler installed handler=\(eventHandler.map { String(describing: $0) } ?? "nil")")
 
         let status = RegisterEventHotKey(
             keyCode,
             modifiers,
             hotKeyID,
-            GetApplicationEventTarget(),
+            target,
             0,
             &hotKeyRef
         )
@@ -80,6 +86,7 @@ final class HotkeyManager {
         if let h = eventHandler { RemoveEventHandler(h) }
         hotKeyRef = nil
         eventHandler = nil
+        HotkeyManager.log("stop: unregistered hotkey and handler")
     }
 
     deinit { stop() }

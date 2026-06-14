@@ -30,14 +30,17 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         Log.write("applicationDidFinishLaunching entered")
 
-        // T17.5: one-time dialog about ⌘+Space conflict.
         FirstLaunchHelper.runIfNeeded()
 
-        // Check Accessibility permission (do NOT prompt — that resets the grant
+        // Check Accessibility (do NOT prompt — that resets the grant
         // every launch and causes NSEvent.addGlobalMonitorForEvents to silently
         // fail. The user grants it once in System Settings; we just verify.)
         let trusted = AXIsProcessTrusted()
         Log.write("accessibility trusted=\(trusted)")
+
+        // Don't re-register Carbon hotkey from applicationDidFinishLaunching —
+        // do it ONCE on first run. Re-registering in-place causes -9878
+        // (already registered). The original start() is called below.
 
         let settings = SettingsStore()
         let keychain: KeychainStoring = KeychainStore()
