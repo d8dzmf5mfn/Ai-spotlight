@@ -9,27 +9,53 @@ import SwiftUI
 // can't just be a Log.write call.
 Log.bootstrap("main.swift top-level code entered")
 
-// NOTE:
-// Global hotkey (Carbon / NSEvent / CGEventTap) is intentionally disabled in Phase 1.
-// On macOS 27 + Swift 6 + SwiftPM builds, hotkey registration is unreliable due to
-// TCC / signing / event routing inconsistencies (Carbon returns noErr but the C
-// callback is never invoked; NSEvent monitors install but receive no events).
-//
-// We defer system-level input capture to Phase 2, after:
-//   - proper Developer ID signing
-//   - a .dmg / .pkg installer
-//   - settling on a known-good third-party library (e.g. KeyboardShortcuts) or
-//     a Raycast-style helper-app architecture
-//
-// In Phase 1, the supported way to summon the panel is the menu bar icon —
-// see StatusBarController. This is the right MVP boundary: the product is
-// "AI command palette", not "system input capturer".
+// The supported Phase 1+ entry points are:
+//   - menu bar icon (always available, see StatusBarController)
+//   - ⌘+Space (via KeyboardShortcuts, see HotkeyService)
+//   - "settings" / "quit" as a search command (see CommandMatcher)
 _ = AppLauncher.shared
+
+/// File-based logger that survives release-build NSLog stripping and
+/// SwiftPM executable target quirks. Writes to /tmp so it works regardless
+/// of the app's actual working directory, sandbox state, or bundle
+/// identity. The /tmp path is the LAST-RESORT diagnostic surface — when
+/// everything else (print, NSLog, stderr) has failed, this still works.
+///
+/// IMPORTANT: any tool that wants to debug launch-time issues in a
+/// SwiftPM .app should write its first message via `Log.bootstrap` (the
+/// top of main.swift does this) — do NOT wait for class initialization,
+/// because Swift 6 strict-concurrency + lazy static initialization has
+/// subtle ordering bugs that can silently drop messages.
+enum Log {
+    /// Path is hardcoded to /tmp so the file is reachable whether the app
+    /// is launched from Finder, Terminal, or via NSWorkspace.
+    static let url: URL = URL(fileURLWithPath: "/tmp/aispotlight-app.log")
+
+    /// Call this from the very first line of main.swift, before any
+    /// framework setup. Uses the simplest possible mechanism (Data.write)
+    /// and avoids the Log enum entirely, so even if the Log type fails to
+    /// initialize for any reason, the message still lands on disk.
+    static func bootstrap(_ msg: String) {
+        let line = "\(Date()) [bootstrap] \(msg)\n"
+        try? Data(line.utf8).write(to: url)
+    }
+
+    /// Writes a line to the log. Safe to call from any thread.
+    static func write(_ msg: String) {
+        let line = "\(Date()) \(msg)\n"
+        if let h = try? FileHandle(forWritingAtPath: url.path) {
+            h.seekToEndOfFile()
+            h.write(Data(line.utf8))
+            try? h.close()
+        }
+    }
+}
 
 final class AppLauncher: NSObject, NSApplicationDelegate {
     static let shared = AppLauncher()
     var panel: SpotlightPanel!
     var state: AppState!
+    var settingsWindow: SettingsWindowController!
 
     override init() {
         super.init()
@@ -52,8 +78,10 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
         Log.write("accessibility trusted=\(trusted)")
 
         let settings = SettingsStore()
-        let keychain: KeychainStoring = KeychainStore()
-        let ai = AIFactory.makeProvider(named: settings.activeProvider, keychain: keychain)
+        // SettingsStore's @Published didSet has already written each field
+        // to UserDefaults; we read the resolved config back from settings.
+        let aiConfig = settings.resolveConfig()
+        let ai = AIFactory.makeProvider(from: aiConfig)
         let interpreter = QueryInterpreter(aiProvider: ai)
         let orchestrator = SearchOrchestrator(providers: [
             FileSystemProvider(),
@@ -80,6 +108,15 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
         // Single, reliable entry point: the menu bar icon.
         _ = StatusBarController(onToggle: toggleAction)
         Log.write("status bar icon installed")
+
+        // Settings window — receives `.aispotlightOpenSettings` from the
+        // menu bar menu AND from the "settings" search command. Mandatory
+        // because `.accessory` apps have no standard App menu → Settings…
+        // entry. Held as a strong reference in `self.settingsWindow` —
+        // otherwise the NotificationCenter observer would be deallocated
+        // and `.aispotlightOpenSettings` would silently do nothing.
+        settingsWindow = SettingsWindowController()
+        Log.write("settings window controller installed")
 
         // Global hotkey (⌘+Space by default, user-rebindable in Settings).
         // Uses sindresorhus/KeyboardShortcuts — see ~/.hermes/skills/

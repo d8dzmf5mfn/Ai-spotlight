@@ -33,6 +33,7 @@ struct ResultRowView: View {
             return result.url.pathExtension.lowercased() == "pdf" ? "doc.fill" : "doc"
         case .folder: return "folder"
         case .app: return "app.fill"
+        case .command: return result.iconSystemName
         }
     }
 }

@@ -63,7 +63,7 @@ final class QueryParserTests: XCTestCase {
     func testTrailingPeriodNotTreatedAsFilename() {
         // "Find notes." should NOT extract "notes." as a filename
         let intent = QueryParser.parse("Find notes.")
-        if case let .findFile(name, _, _) = intent {
+        if case let .findFile(name, _, _, _) = intent {
             XCTAssertNil(name, "Trailing period must not be treated as a filename, got \(String(describing: name))")
         }
         // If we got .findFile at all here, that's also acceptable — but name must be nil

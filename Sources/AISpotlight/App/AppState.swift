@@ -33,6 +33,16 @@ final class AppState: ObservableObject {
 
     private func runSearch(_ q: String) async {
         isLoading = true; defer { isLoading = false }
+
+        // Special commands bypass the regular search/AI pipeline. We check
+        // them first so they work even when "settings" matches some file
+        // by the same name on disk.
+        if let command = CommandMatcher.match(q) {
+            results = [SearchResult.command(command: command)]
+            selection = 0
+            return
+        }
+
         let intent = await interpreter.interpret(q)
         let r = await orchestrator.run(intent: intent)
         if !Task.isCancelled {
@@ -51,11 +61,53 @@ final class AppState: ObservableObject {
     func activate() {
         guard let i = selection, results.indices.contains(i) else { return }
         let r = results[i]
+
+        // Handle commands first — they don't go through NSWorkspace.
+        if let cmd = r.command {
+            switch cmd {
+            case .openSettings:
+                NotificationCenter.default.post(name: .aispotlightOpenSettings, object: nil)
+            case .quit:
+                NSApp.terminate(nil)
+            }
+            closePanel()
+            return
+        }
+
         NSWorkspace.shared.open(r.url)
-        // Close our panel. Iterate all NSApp.windows because keyWindow may
-        // have already been stolen by the just-launched app (e.g. Safari).
+        closePanel()
+    }
+
+    private func closePanel() {
         for w in NSApp.windows where w is SpotlightPanel {
             w.orderOut(nil)
         }
+    }
+}
+
+/// `Command` and `CommandMatcher` are defined in AISpotlightKit/Command.swift.
+/// This extension just adds the `SearchResult.command(command:)` factory
+/// that wraps a `Command` into a pseudo-result for the result list.
+
+extension SearchResult {
+    /// Pseudo-result used for built-in commands. The `title` doubles as the
+    /// display label in the result list; `command` carries the actual
+    /// `Command` enum so the activator doesn't have to parse the URL.
+    static func command(command: Command) -> SearchResult {
+        let label: String
+        let icon: String
+        switch command {
+        case .openSettings: label = "Open AI Spotlight Settings"; icon = "gear"
+        case .quit:         label = "Quit AI Spotlight";          icon = "power"
+        }
+        return SearchResult(
+            title: label,
+            subtitle: "Built-in command",
+            iconSystemName: icon,
+            url: URL(string: "aispotlight://command/\(command)")!,
+            kind: .command,
+            score: 1.0,
+            command: command
+        )
     }
 }

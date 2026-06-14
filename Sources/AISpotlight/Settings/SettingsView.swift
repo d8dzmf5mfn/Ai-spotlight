@@ -1,35 +1,170 @@
 import SwiftUI
 import KeyboardShortcuts
+import AISpotlightKit
 
 struct SettingsView: View {
     @StateObject private var store = SettingsStore()
+    @StateObject private var discovery = LocalModelDiscoveryState()
 
     var body: some View {
         Form {
             Section("AI Provider") {
                 Picker("Provider", selection: $store.activeProvider) {
                     Text("None (rule-based only)").tag("none")
-                    Text("OpenAI").tag("openai")
-                    // D2: MiniMax removed until Phase 2 implements MiniMaxProvider.
+                    Text("Ollama (local)").tag("ollama")
+                    Text("Custom (any OpenAI-compatible API)").tag("custom")
+                }
+                Text(providerDescription)
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            if store.activeProvider == "ollama" {
+                Section("Ollama settings") {
+                    HStack(alignment: .center) {
+                        // Picker replaces the freeform text field once the
+                        // user has run discovery; if discovery hasn't
+                        // succeeded we still let them type a custom model.
+                        if discovery.discoveredModels.isEmpty {
+                            TextField("Model", text: $store.ollamaModel, prompt: Text("gemma2:2b"))
+                        } else {
+                            Picker("Model", selection: $store.ollamaModel) {
+                                ForEach(discovery.discoveredModels, id: \.self) { m in
+                                    Text(m).tag(m)
+                                }
+                            }
+                        }
+                        Button {
+                            Task { await discovery.detect() }
+                        } label: {
+                            if discovery.isDetecting {
+                                ProgressView().scaleEffect(0.5).frame(width: 16, height: 16)
+                            } else {
+                                Text("Detect")
+                            }
+                        }
+                        .disabled(discovery.isDetecting)
+                    }
+                    Text(discoveryStatusLine)
+                        .font(.caption).foregroundStyle(discoveryStatusColor)
+                    Text("Default endpoint: http://localhost:11434")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            Section("API Keys") {
-                SecureField("OpenAI API Key", text: $store.openaiKey)
-                Button("Save") { store.saveKeys() }
+
+            if store.activeProvider == "custom" {
+                Section("Custom provider settings") {
+                    TextField("Base URL", text: $store.customBaseURL, prompt: Text("https://api.openai.com/v1"))
+                    TextField("Model", text: $store.customModel, prompt: Text("gpt-4o-mini"))
+                    SecureField("API key (leave blank for providers that don't require one)",
+                                text: $store.customAPIKey)
+                }
             }
+
             Section("Hotkey") {
-                // Recorder writes the user's chosen binding to UserDefaults
-                // under HotkeyService.togglePanelName.rawValue, which the
-                // library then re-installs on next launch.
                 KeyboardShortcuts.Recorder("Toggle AI Spotlight:",
                                           name: HotkeyService.togglePanelName)
                 Text("Default: ⌘+Space. If ⌘+Space also opens macOS Spotlight, " +
                      "disable it in System Settings → Keyboard → Keyboard Shortcuts " +
                      "→ Spotlight → uncheck \"Show Spotlight search\".")
-                    .font(.callout).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .padding(20)
-        .frame(width: 460, height: 400)
+        .frame(width: 480, height: 500)
+        .safeAreaInset(edge: .bottom) {
+            HStack {
+                Spacer()
+                Button("Done") { dismissWindow() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(.horizontal, 20).padding(.vertical, 10)
+            .background(.bar)
+        }
+    }
+
+    // MARK: - Status / state helpers
+
+    private var providerDescription: String {
+        switch store.activeProvider {
+        case "none":
+            return "Pure rule-based parser (English + Chinese keywords). " +
+                   "No AI cost, no network."
+        case "ollama":
+            return "Local LLM via Ollama. Make sure the Ollama server " +
+                   "is running (default: ollama serve). " +
+                   "No API key needed."
+        case "custom":
+            return "Any OpenAI-compatible API (OpenAI, Together, Groq, LM Studio, etc.). " +
+                   "API key is optional for local servers."
+        default:
+            return ""
+        }
+    }
+
+    private var discoveryStatusLine: String {
+        switch discovery.status {
+        case .idle:        return "Click Detect to look for installed Ollama models."
+        case .detecting:   return "Talking to http://localhost:11434…"
+        case .found(let n):
+            if n == 0 { return "Ollama is running but no models are installed. Run: ollama pull gemma2:2b" }
+            return "Found \(n) model\(n == 1 ? "" : "s") on your local Ollama."
+        case .failed(let msg): return "Discovery failed: \(msg)"
+        }
+    }
+
+    private var discoveryStatusColor: Color {
+        switch discovery.status {
+        case .idle, .detecting: return .secondary
+        case .found(let n):     return n > 0 ? .green : .orange
+        case .failed:           return .red
+        }
+    }
+
+    private func dismissWindow() {
+        // @State saveStatus is purely visual feedback; SettingsStore's
+        // @Published vars persist to UserDefaults on every change, so
+        // there's nothing to "save" — the user's edits are already live.
+        NSApp.keyWindow?.performClose(nil)
+    }
+}
+
+/// Owns the auto-discovery UI state. Kept as an ObservableObject so the
+/// async detection result updates the view automatically.
+@MainActor
+final class LocalModelDiscoveryState: ObservableObject {
+    enum Status: Equatable {
+        case idle
+        case detecting
+        case found(Int)
+        case failed(String)
+    }
+
+    @Published var isDetecting: Bool = false
+    @Published var discoveredModels: [String] = []
+    @Published var status: Status = .idle
+
+    private let discovery: LocalModelDiscovering
+
+    init(discovery: LocalModelDiscovering = OllamaDiscovery()) {
+        self.discovery = discovery
+    }
+
+    /// Trigger one detection round. Updates `status` and `discoveredModels`.
+    /// Errors are reported in-band (no throw) so the UI can show a friendly
+    /// message rather than a hard alert.
+    func detect() async {
+        guard !isDetecting else { return }
+        isDetecting = true
+        status = .detecting
+        let endpoint = URL(string: "http://localhost:11434")!
+        do {
+            let models = try await discovery.availableModels(at: endpoint)
+            discoveredModels = models
+            status = .found(models.count)
+        } catch {
+            discoveredModels = []
+            status = .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+        }
+        isDetecting = false
     }
 }

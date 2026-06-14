@@ -1,24 +1,32 @@
 import Foundation
 import AppKit
 
-/// Scans `/Applications` + running apps. Uses a serial dispatch queue instead
-/// of an actor so the cache is populated synchronously in init (B5 fix: the
-/// first `search()` call always sees a populated cache).
+/// Scans `/Applications` + running apps. Returns an empty result list
+/// immediately on the first `search()` call and populates the cache
+/// asynchronously — the goal is to never block the first ⌘+Space
+/// keystroke on a directory scan that can take 100-300ms on a
+/// Mac with a large `/Applications`.
+///
+/// Sendability: `cached` is mutated only while holding `lock`, so we
+/// mark the class `@unchecked Sendable` rather than make it an actor
+/// (actors add an extra hop on every `search` call).
 public final class AppProvider: SearchProvider, @unchecked Sendable {
     public let name = "Apps"
     private var cached: [SearchResult] = []
     private let lock = NSLock()
 
     public init() {
-        // sync scan on the caller's thread (always main, from AppDelegate)
-        let results = Self.scan()
-        lock.lock()
-        cached = results
-        lock.unlock()
+        // Kick off the first scan in the background so the first
+        // search() call after launch finds data within ~50-300ms.
+        // (If you call search() before the scan finishes, you simply
+        // get an empty list — which is the right UX for a Spotlight clone.)
+        Task.detached(priority: .userInitiated) { await self.refresh() }
     }
 
     public func refresh() async {
-        let results = Self.scan()
+        let results = await Task.detached(priority: .userInitiated) {
+            Self.scan()
+        }.value
         lock.lock()
         cached = results
         lock.unlock()
@@ -27,22 +35,20 @@ public final class AppProvider: SearchProvider, @unchecked Sendable {
     private static func scan() -> [SearchResult] {
         var seen = Set<URL>()
         var out: [SearchResult] = []
+        out.reserveCapacity(64)  // typical Mac has 30-80 user apps
 
         for app in NSWorkspace.shared.runningApplications {
-            guard let url = app.bundleURL else { continue }
-            guard !seen.contains(url) else { continue }
-            seen.insert(url)
-            out.append(makeResult(from: url))
+            guard let url = app.bundleURL, seen.insert(url).inserted else { continue }
+            out.append(Self.makeResult(from: url))
         }
 
-        for dir in appDirectories() {
+        for dir in Self.appDirectories() {
             guard let items = try? FileManager.default.contentsOfDirectory(
                 at: dir, includingPropertiesForKeys: nil
             ) else { continue }
             for url in items where url.pathExtension == "app" {
-                guard !seen.contains(url) else { continue }
-                seen.insert(url)
-                out.append(makeResult(from: url))
+                guard seen.insert(url).inserted else { continue }
+                out.append(Self.makeResult(from: url))
             }
         }
 
@@ -52,29 +58,36 @@ public final class AppProvider: SearchProvider, @unchecked Sendable {
     public func search(intent: Intent, limit: Int = 20) async -> [SearchResult] {
         guard case let .openApp(name) = intent else { return [] }
         let q = name.lowercased()
-        struct Scored { let result: SearchResult; let isPrefix: Bool; let isSubstring: Bool }
+
         lock.lock()
         let snapshot = cached
         lock.unlock()
 
-        let scored: [Scored] = snapshot
-            .map {
-                let lower = $0.title.lowercased()
-                return Scored(result: $0, isPrefix: lower.hasPrefix(q), isSubstring: lower.contains(q))
-            }
-            .filter { $0.isSubstring }
-            .sorted { lhs, rhs in
-                if lhs.isPrefix != rhs.isPrefix { return lhs.isPrefix && !rhs.isPrefix }
-                return lhs.result.title.localizedCaseInsensitiveCompare(rhs.result.title) == .orderedAscending
-            }
-        return scored.prefix(limit).map { entry in
+        // Single pass: filter by substring, compute prefix hit for
+        // ranking, collect into a tiny array. Avoids the earlier
+        // 3-pass (map → filter → sorted) flow.
+        var matched: [(r: SearchResult, isPrefix: Bool)] = []
+        matched.reserveCapacity(20)
+        for result in snapshot {
+            let title = result.title
+            let lower = title.lowercased()
+            guard lower.contains(q) else { continue }
+            matched.append((result, lower.hasPrefix(q)))
+        }
+        matched.sort { lhs, rhs in
+            if lhs.isPrefix != rhs.isPrefix { return lhs.isPrefix }
+            return lhs.r.title.localizedCaseInsensitiveCompare(rhs.r.title) == .orderedAscending
+        }
+        if matched.count > limit { matched.removeLast(matched.count - limit) }
+
+        return matched.map { entry in
             SearchResult(
-                title: entry.result.title,
-                subtitle: entry.result.subtitle,
-                iconSystemName: entry.result.iconSystemName,
-                url: entry.result.url,
+                title: entry.r.title,
+                subtitle: entry.r.subtitle,
+                iconSystemName: entry.r.iconSystemName,
+                url: entry.r.url,
                 kind: .app,
-                score: entry.result.score + (entry.isPrefix ? 100 : 10)
+                score: entry.r.score + (entry.isPrefix ? 100 : 10)
             )
         }
     }

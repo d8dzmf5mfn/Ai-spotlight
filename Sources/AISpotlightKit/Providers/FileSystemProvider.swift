@@ -8,7 +8,7 @@ public final class FileSystemProvider: SearchProvider, @unchecked Sendable {
     public init() {}
 
     public func search(intent: Intent, limit: Int = 20) async -> [SearchResult] {
-        guard case let .findFile(name, date, kind) = intent else { return [] }
+        guard case let .findFile(name, date, kind, _) = intent else { return [] }
         let query = buildQuery(name: name, date: date, kind: kind)
         guard !query.isEmpty else { return [] }
 
