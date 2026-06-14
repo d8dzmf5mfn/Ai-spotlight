@@ -3,9 +3,11 @@ import AISpotlightKit
 import Foundation
 import SwiftUI
 
-// Direct file write at process start — before any framework setup.
-let _ = try? Data("\(Date()) main.swift top-level code entered\n".utf8)
-    .write(to: URL(fileURLWithPath: "/tmp/aispotlight-app.log"))
+// Bootstrap log: first thing main.swift does, before any framework setup.
+// If everything after this fails, we'll still have proof that main.swift
+// was entered and how far execution got. See Log.bootstrap for why this
+// can't just be a Log.write call.
+Log.bootstrap("main.swift top-level code entered")
 
 // NOTE:
 // Global hotkey (Carbon / NSEvent / CGEventTap) is intentionally disabled in Phase 1.
