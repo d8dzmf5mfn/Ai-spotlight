@@ -1,4 +1,5 @@
 import SwiftUI
+import KeyboardShortcuts
 
 struct SettingsView: View {
     @StateObject private var store = SettingsStore()
@@ -17,11 +18,18 @@ struct SettingsView: View {
                 Button("Save") { store.saveKeys() }
             }
             Section("Hotkey") {
-                Text("Press ⌘+Space to toggle. If ⌘+Space also opens macOS Spotlight, see Task 17.5 to free it.")
+                // Recorder writes the user's chosen binding to UserDefaults
+                // under HotkeyService.togglePanelName.rawValue, which the
+                // library then re-installs on next launch.
+                KeyboardShortcuts.Recorder("Toggle AI Spotlight:",
+                                          name: HotkeyService.togglePanelName)
+                Text("Default: ⌘+Space. If ⌘+Space also opens macOS Spotlight, " +
+                     "disable it in System Settings → Keyboard → Keyboard Shortcuts " +
+                     "→ Spotlight → uncheck \"Show Spotlight search\".")
                     .font(.callout).foregroundStyle(.secondary)
             }
         }
         .padding(20)
-        .frame(width: 460, height: 360)
+        .frame(width: 460, height: 400)
     }
 }

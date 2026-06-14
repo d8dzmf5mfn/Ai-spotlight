@@ -51,8 +51,9 @@ Kit (testable, no UI)
 
 App (SwiftUI + AppKit)
   main.swift + AppLauncher (NSApplication setup, traditional main.swift pattern)
-  SpotlightPanel (NSPanel) + StatusBarController (menu bar icon — the only Phase 1 entry)
-  Settings (SettingsStore + SettingsView + FirstLaunchHelper)
+  SpotlightPanel (NSPanel) + StatusBarController (menu bar icon — always-on fallback)
+  HotkeyService (KeyboardShortcuts wrapper; ⌘+Space by default, user-rebindable)
+  Settings (SettingsStore + SettingsView + FirstLaunchHelper + KeyboardShortcuts.Recorder)
   UI (SearchField, ResultListView, ResultRowView, SearchWindowView)
   AIFactory, MiniMaxProvider (stub)
 ```
@@ -70,16 +71,9 @@ swift test
 
 ## Known limitations (Phase 1)
 
-- **No global hotkey.** macOS 27 + Swift 6 + SwiftPM builds + unsigned
-  ad-hoc signing make global hotkey registration unreliable: Carbon
-  RegisterEventHotKey returns noErr but the C callback is never invoked;
-  NSEvent.addGlobalMonitorForEvents installs but receives no events.
-  Removed HotkeyManager in Phase 1; deferred to Phase 2 (after proper
-  Developer ID signing + known-good third-party library like
-  KeyboardShortcuts, or a Raycast-style helper-app architecture).
-  **Workaround: click the menu bar icon (🔍) to summon the panel.**
 - **Hotkey rebinding UI not exposed.** Hardcoded no-op. With no hotkey
-  to rebind, the surface would be misleading.
+  to rebind, the surface would be misleading. (Phase 2: use
+  `KeyboardShortcuts.Recorder`.)
 - **MiniMax provider option removed from Settings UI.** Stub was never
   implemented end-to-end; only "None" and "OpenAI" remain.
 - **No code signing / notarization** — `.app` is unsigned. Personal use only.
@@ -90,6 +84,14 @@ swift test
 - **QueryParser uses token-set matching with possessive-stripping.** Edge
   cases around word boundaries are handled, but truly novel phrasings
   (e.g. "yesterday's downloads") may still slip. Improve in Phase 3.
+
+## Hotkey (Phase 2, shipped via `HotkeyService`)
+
+Global hotkey via [`KeyboardShortcuts`](https://github.com/sindresorhus/KeyboardShortcuts)
+2.4.0. **Default: ⌘+Space** (requires disabling the system Spotlight binding;
+see `FirstLaunchHelper`). The user can rebind via `KeyboardShortcuts.Recorder`
+in the Settings panel. The menu bar icon (🔍) is the fallback entry point
+and always works regardless of system Spotlight state.
 
 ## Architecture overview
 

@@ -81,6 +81,13 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
         _ = StatusBarController(onToggle: toggleAction)
         Log.write("status bar icon installed")
 
+        // Global hotkey (⌘+Space by default, user-rebindable in Settings).
+        // Uses sindresorhus/KeyboardShortcuts — see ~/.hermes/skills/
+        // macos-global-hotkey-diagnosis for why we abandoned the hand-rolled
+        // Carbon/NSEvent path.
+        HotkeyService.startGlobal(onToggle: toggleAction)
+        Log.write("hotkey service started")
+
         // First-launch UX: show panel once so the user sees the search experience.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             Log.write("auto-toggling panel for first-time UX")
