@@ -60,6 +60,15 @@ public actor ContentIndexer {
         let decisions = decisionsForRoots(roots)
         scanned = decisions.count
 
+        // Track which URLs we saw on disk this pass — anything in
+        // `existingDocumentMtimes` (pre-load from disk) but not in
+        // `decisions` was deleted from the filesystem and needs to be
+        // removed from the index. We collect the seen-URLs into a Set
+        // here rather than threading it through `decisions` because
+        // the seen set is large and we already have a local cache.
+        var seenThisPass: Set<URL> = []
+        for d in decisions { seenThisPass.insert(d.url) }
+
         // Pass 2: apply decisions in batch — group by action so we
         // make fewer actor hops.
         let toUpsert = decisions.filter {
@@ -67,7 +76,7 @@ public actor ContentIndexer {
             if case .update = $0.action { return true }
             return false
         }
-        let toRemove = decisions.compactMap { d -> URL? in
+        let toRemoveFromDisk = decisions.compactMap { d -> URL? in
             if case .remove = d.action { return d.url }
             return nil
         }
@@ -88,8 +97,29 @@ public actor ContentIndexer {
             }
         }
 
-        for url in toRemove {
+        // Remove files that were marked for removal by the walker
+        // (currently unused, but the pipeline is in place for future
+        // pass-3 logic).
+        for url in toRemoveFromDisk {
             await store.remove(url)
+            removed += 1
+        }
+
+        // Pass 3: find URLs in the existing cache that weren't seen
+        // on disk this pass. These are files the user deleted between
+        // index runs. We removed them from the store and from our
+        // local cache.
+        //
+        // Note: `existingDocumentMtimes` is a snapshot of the disk
+        // index at `ensureLocalCachesLoaded` time. Files added by THIS
+        // pass (via `ingest`) are not in that map yet (we add them
+        // after `upsert` returns). So the set difference here is
+        // exactly "files that were in the index but aren't on disk now".
+        let deletedURLs = Set(existingDocumentMtimes.keys).subtracting(seenThisPass)
+        for url in deletedURLs {
+            await store.remove(url)
+            existingDocumentMtimes.removeValue(forKey: url)
+            existingDocumentSizes.removeValue(forKey: url)
             removed += 1
         }
 
@@ -164,7 +194,13 @@ public actor ContentIndexer {
             // which is both wasteful and a feedback loop (each rebuild
             // makes the index file slightly larger, which makes the
             // next index file larger...).
-            if url == self.ourOwnIndexPath { continue }
+            //
+            // We compare via `standardizedFileURL` because the path the
+            // user passed to `IndexStore.init` may be a symlinked form
+            // (e.g. `/var/...`) while `FileManager` enumeration returns
+            // the resolved form (e.g. `/private/var/...`). String
+            // equality on the path won't match in that case.
+            if url.standardizedFileURL == self.ourOwnIndexPath.standardizedFileURL { continue }
             if !TextExtractor.isIndexable(url: url) { continue }
             // Get mtime + size for change detection
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
