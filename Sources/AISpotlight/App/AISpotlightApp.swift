@@ -16,6 +16,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var state: AppState!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // T17.5: show one-time dialog about ⌘+Space conflict (must run before
+        // the rest of init so the user sees it on first launch).
+        FirstLaunchHelper.runIfNeeded()
+
         NSApp.setActivationPolicy(.accessory)  // no dock icon
 
         let settings = SettingsStore()
