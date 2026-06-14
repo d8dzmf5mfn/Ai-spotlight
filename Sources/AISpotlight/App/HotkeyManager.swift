@@ -1,105 +1,41 @@
 import AppKit
-import Carbon.HIToolbox
 
-/// Global hotkey using Carbon's RegisterEventHotKey. This is the same API used
-/// by Spotlight, Alfred, Raycast, and other launchers. Requires no Accessibility
-/// or Input Monitoring permission — it registers at the WindowServer level.
-/// Tradeoff: the hotkey must not already be in use by macOS (e.g. ⌘+Space is
-/// owned by Spotlight, so a different combination must be chosen).
+/// No-op hotkey manager. The real implementation (Carbon RegisterEventHotKey)
+/// was tried but couldn't be made to receive keypress events reliably in this
+/// project's specific build setup (SwiftPM .executable target, ad-hoc signed
+/// .app). The menu bar icon in `StatusBarController` is the supported way
+/// to summon the panel for now.
+///
+/// What we tried, and why it didn't work:
+/// 1. NSEvent.addGlobalMonitorForEvents — installs "OK" but never receives
+///    events. Suspected cause: the binary's TCC identity was inconsistent
+///    with what was authorized in System Settings → Accessibility.
+/// 2. CGEvent.tapCreate — returns nil (event tap disabled). Suspected cause:
+///    Input Monitoring permission couldn't be granted reliably.
+/// 3. Carbon RegisterEventHotKey — registers successfully (noErr) but the
+///    C callback is never invoked. The event target swap
+///    (GetEventDispatcherTarget vs GetApplicationEventTarget), callback
+///    lifetime fix (sentinel + global registry to survive Swift 6 ARC), and
+///    process-identity fix (proper Bundle Identifier in Info.plist + ad-hoc
+///    signature + codesign --deep --sign -) all combined to register
+///    successfully, but the dispatch path remains silent. This is most
+///    likely a Swift 6 / Carbon interop quirk in this build environment.
+///
+/// To re-enable global hotkey:
+/// 1. Replace the `AppLauncher` class with a standard `@main struct` pattern
+///    using SwiftUI's `App` protocol (or NSApplicationMain), avoiding the
+///    `init() { app.run() }` pattern in `main.swift`.
+/// 2. Try a known-working Carbon HotKey library such as
+///    [KeyboardShortcuts](https://github.com/sindresorhus/KeyboardShortcuts).
 final class HotkeyManager {
-    private var hotKeyRef: EventHotKeyRef?
-    private var eventHandler: EventHandlerRef?
-    private let onToggle: () -> Void
-    private let keyCode: UInt32
-    private let modifiers: UInt32
     weak var panel: NSWindow?
 
-    /// `modifiers` is a Carbon modifiers bitmask: cmdKey=256, option=2048, etc.
-    init(keyCode: UInt32 = UInt32(kVK_Space),
-         carbonModifiers: UInt32 = UInt32(cmdKey | optionKey),
+    init(keyCode: UInt32 = 49,  // kVK_Space
+         carbonModifiers: UInt32 = 0x0900,  // cmdKey | optionKey
          onToggle: @escaping () -> Void) {
-        self.keyCode = keyCode
-        self.modifiers = carbonModifiers
-        self.onToggle = onToggle
+        // Intentionally no-op.
     }
 
-    func start() {
-        HotkeyManager.log("start: RegisterEventHotKey keyCode=\(keyCode) mods=\(modifiers)")
-        // Carbon hotkey signature: 4-byte code identifying our app's hotkey.
-        // 'ASP ' = 'A','I','S','P' as OSType (big-endian).
-        let signature: OSType = 0x41495053  // 'AIPS'
-        let hotKeyID = EventHotKeyID(signature: signature, id: 1)
-
-        // Install event handler that routes hotkey presses back to us.
-        // Use GetEventDispatcherTarget() (not GetApplicationEventTarget) — the
-        // dispatcher is where Carbon hotkey events are actually routed to.
-        // Using the application target silently drops events on macOS 14+.
-        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
-                                  eventKind: UInt32(kEventHotKeyPressed))
-        let selfPtr = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
-        let target = GetEventDispatcherTarget()
-        InstallEventHandler(
-            target,
-            { _, eventRef, userData in
-                guard let userData = userData else { return noErr }
-                let mgr = Unmanaged<HotkeyManager>.fromOpaque(userData).takeUnretainedValue()
-                var receivedID = EventHotKeyID()
-                let err = GetEventParameter(
-                    eventRef,
-                    EventParamName(kEventParamDirectObject),
-                    EventParamType(typeEventHotKeyID),
-                    nil,
-                    MemoryLayout<EventHotKeyID>.size,
-                    nil,
-                    &receivedID
-                )
-                if err == noErr && receivedID.signature == 0x41495053 && receivedID.id == 1 {
-                    HotkeyManager.log("handler: hotkey pressed, dispatching to toggle")
-                    DispatchQueue.main.async { mgr.onToggle() }
-                }
-                return noErr
-            },
-            1,
-            &spec,
-            selfPtr,
-            &eventHandler
-        )
-        HotkeyManager.log("InstallEventHandler installed handler=\(eventHandler.map { String(describing: $0) } ?? "nil")")
-
-        let status = RegisterEventHotKey(
-            keyCode,
-            modifiers,
-            hotKeyID,
-            target,
-            0,
-            &hotKeyRef
-        )
-        if status == noErr {
-            HotkeyManager.log("start: RegisterEventHotKey OK (ref=\(hotKeyRef.map { String(describing: $0) } ?? "nil"))")
-        } else {
-            HotkeyManager.log("start: RegisterEventHotKey FAILED status=\(status) — likely already in use by system")
-        }
-    }
-
-    func stop() {
-        if let ref = hotKeyRef { UnregisterEventHotKey(ref) }
-        if let h = eventHandler { RemoveEventHandler(h) }
-        hotKeyRef = nil
-        eventHandler = nil
-        HotkeyManager.log("stop: unregistered hotkey and handler")
-    }
-
-    deinit { stop() }
-
-    fileprivate static func log(_ msg: String) {
-        let line = "\(Date()) \(msg)\n"
-        let path = "/tmp/aispotlight-hotkey.log"
-        if let h = FileHandle(forWritingAtPath: path) {
-            h.seekToEndOfFile()
-            h.write(line.data(using: .utf8) ?? Data())
-            try? h.close()
-        } else {
-            try? line.data(using: .utf8)?.write(to: URL(fileURLWithPath: path))
-        }
-    }
+    func start() {}
+    func stop() {}
 }

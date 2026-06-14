@@ -2,7 +2,6 @@ import AppKit
 import AISpotlightKit
 import Foundation
 import SwiftUI
-import Carbon.HIToolbox
 
 // Direct file write at process start — before any framework setup
 let startMsg = "\(Date()) main.swift top-level code entered\n"
@@ -68,9 +67,7 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
             }
         }
 
-        // Try ⌥+Space first (Phase 1 safest). ⌘+Space is owned by Spotlight
-        // and RegisterEventHotKey will return a non-zero status for it.
-        hotkey = HotkeyManager(keyCode: UInt32(kVK_Space), carbonModifiers: UInt32(cmdKey | optionKey), onToggle: toggleAction)
+        hotkey = HotkeyManager(keyCode: 49, carbonModifiers: 0x0900, onToggle: toggleAction)
         hotkey.panel = panel
         hotkey.start()
         Log.write("hotkey.start() called (Carbon RegisterEventHotKey ⌥+Space)")
