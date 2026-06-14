@@ -4,13 +4,14 @@ AI-powered macOS launcher. Phase 1 MVP.
 
 See `.hermes/plans/2026-06-14_153027-ai-spotlight-phase1-mvp.md` for the full plan.
 
-App (SwiftUI + AppKit)
-  main.swift + AppLauncher (NSApplication setup, traditional main.swift pattern)
-  SpotlightPanel (NSPanel) + StatusBarController (menu bar icon — the only Phase 1 entry)
-  Settings (SettingsStore + SettingsView + FirstLaunchHelper)
-  UI (SearchField, ResultListView, ResultRowView, SearchWindowView)
-  AIFactory, MiniMaxProvider (stub)
-```
+## Phase 1 scope
+
+- Menu bar icon (🔍) opens a Spotlight-like panel
+- Rule-based query parser (English + Chinese keywords)
+- Optional AI fallback (OpenAI, key in Settings)
+- File search via Spotlight `MDQuery`
+- App search via `/Applications` scan
+- (⌘+Space hotkey deferred to Phase 2 — see Post-mortem below)
 
 ## Post-mortem (Phase 1)
 
@@ -39,6 +40,22 @@ open "build/AI Spotlight.app"   # first time: right-click → Open (Gatekeeper)
 
 Then click the menu bar icon (🔍) to summon the panel. Global hotkey is
 deferred to Phase 2 — see "Known limitations" above.
+
+## Architecture overview
+
+```
+Kit (testable, no UI)
+  Intent, QueryParser, QueryInterpreter, ResultMerger, SearchOrchestrator
+  KeychainStore (+ InMemoryKeychain for tests)
+  Providers: FileSystemProvider (MDQuery), AppProvider (Launch Services), OpenAIProvider
+
+App (SwiftUI + AppKit)
+  main.swift + AppLauncher (NSApplication setup, traditional main.swift pattern)
+  SpotlightPanel (NSPanel) + StatusBarController (menu bar icon — the only Phase 1 entry)
+  Settings (SettingsStore + SettingsView + FirstLaunchHelper)
+  UI (SearchField, ResultListView, ResultRowView, SearchWindowView)
+  AIFactory, MiniMaxProvider (stub)
+```
 
 ## Testing
 
