@@ -1,4 +1,4 @@
-public enum Intent: Equatable, Sendable {
+public enum Intent: Equatable, Codable, Sendable {
     case findFile(name: String?, dateFilter: DateFilter?, kind: FileKind?)
     case openApp(name: String)
     case unknown(raw: String)
