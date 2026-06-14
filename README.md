@@ -4,13 +4,24 @@ AI-powered macOS launcher. Phase 1 MVP.
 
 See `.hermes/plans/2026-06-14_153027-ai-spotlight-phase1-mvp.md` for the full plan.
 
-## Phase 1 scope
-- ⌘+Space opens a Spotlight-like panel
-- Rule-based query parser (English + Chinese keywords)
-- Optional AI fallback (OpenAI, key in Settings)
-- File search via Spotlight `MDQuery`
-- App search via `/Applications` scan
-- First-launch helper guides user to free ⌘+Space from macOS Spotlight
+App (SwiftUI + AppKit)
+  main.swift + AppLauncher (NSApplication setup, traditional main.swift pattern)
+  SpotlightPanel (NSPanel) + StatusBarController (menu bar icon — the only Phase 1 entry)
+  Settings (SettingsStore + SettingsView + FirstLaunchHelper)
+  UI (SearchField, ResultListView, ResultRowView, SearchWindowView)
+  AIFactory, MiniMaxProvider (stub)
+```
+
+## Post-mortem (Phase 1)
+
+Three skills encode the lessons from this build — in `~/.hermes/skills/`:
+
+- **swift-release-logging** — `NSLog` and `print` are unreliable in SwiftPM release
+  builds; always write to `/tmp` first.
+- **swift-app-entry-point** — for SwiftPM `.executable` targets with AppKit, use
+  `main.swift` + `NSApplication.run()`; `@main struct App` is unreliable.
+- **macos-global-hotkey-diagnosis** — when global hotkey isn't firing, build a
+  50-line minimal test app first; don't debug hotkey in your 2000-line main app.
 
 ## Run
 
@@ -21,9 +32,13 @@ swift run AISpotlight           # dev mode (no .app bundle)
 ```
 
 To launch the .app:
+
 ```bash
 open "build/AI Spotlight.app"   # first time: right-click → Open (Gatekeeper)
 ```
+
+Then click the menu bar icon (🔍) to summon the panel. Global hotkey is
+deferred to Phase 2 — see "Known limitations" above.
 
 ## Testing
 
