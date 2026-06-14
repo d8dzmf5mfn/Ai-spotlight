@@ -38,13 +38,26 @@ swift test
 
 ## Known limitations (Phase 1)
 
-- **QueryParser uses token-set matching with possessive-stripping.** Edge cases around word boundaries are handled, but truly novel phrasings (e.g. "yesterday's downloads") may still slip. Acceptable for Phase 1's 8 manual test cases; improve in Phase 3.
-- **Hotkey rebinding is not exposed in Settings UI.** Hardcoded to ⌘+Space. A surface that didn't actually rewire the hotkey was removed to avoid misleading users; real rebinding lands with a proper text-field recorder in Phase 2.
-- **MiniMax provider option removed from Settings.** The provider stub was never implemented end-to-end; Settings now only shows "None" and "OpenAI". Add back when MiniMaxProvider is real (Phase 2).
+- **No global hotkey.** macOS 27 + Swift 6 + SwiftPM builds + unsigned
+  ad-hoc signing make global hotkey registration unreliable: Carbon
+  RegisterEventHotKey returns noErr but the C callback is never invoked;
+  NSEvent.addGlobalMonitorForEvents installs but receives no events.
+  Removed HotkeyManager in Phase 1; deferred to Phase 2 (after proper
+  Developer ID signing + known-good third-party library like
+  KeyboardShortcuts, or a Raycast-style helper-app architecture).
+  **Workaround: click the menu bar icon (🔍) to summon the panel.**
+- **Hotkey rebinding UI not exposed.** Hardcoded no-op. With no hotkey
+  to rebind, the surface would be misleading.
+- **MiniMax provider option removed from Settings UI.** Stub was never
+  implemented end-to-end; only "None" and "OpenAI" remain.
 - **No code signing / notarization** — `.app` is unsigned. Personal use only.
-- **No network timeout / rate limit on OpenAI calls.** Acceptable for personal use; harden before wider distribution.
-- **Date filters are rolling 24h / 7d / 30d**, not calendar boundaries ("yesterday" at 11:59 PM vs midnight is ambiguous).
-- **Cross-Space hotkey may not fire** while fullscreen apps have focus — known Apple limitation of `NSEvent.addGlobalMonitorForEvents`.
+- **No network timeout / rate limit on OpenAI calls.** Acceptable for
+  personal use; harden before wider distribution.
+- **Date filters are rolling 24h / 7d / 30d**, not calendar boundaries
+  ("yesterday" at 11:59 PM vs midnight is ambiguous).
+- **QueryParser uses token-set matching with possessive-stripping.** Edge
+  cases around word boundaries are handled, but truly novel phrasings
+  (e.g. "yesterday's downloads") may still slip. Improve in Phase 3.
 
 ## Architecture overview
 

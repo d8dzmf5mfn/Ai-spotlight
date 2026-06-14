@@ -3,18 +3,30 @@ import AISpotlightKit
 import Foundation
 import SwiftUI
 
-// Direct file write at process start — before any framework setup
-let startMsg = "\(Date()) main.swift top-level code entered\n"
-let _ = try? Data(startMsg.utf8).write(to: URL(fileURLWithPath: "/tmp/aispotlight-app.log"))
+// Direct file write at process start — before any framework setup.
+let _ = try? Data("\(Date()) main.swift top-level code entered\n".utf8)
+    .write(to: URL(fileURLWithPath: "/tmp/aispotlight-app.log"))
 
-// Traditional main.swift entry point. @main doesn't always link correctly
-// in SwiftPM executable targets, so we use main.swift directly.
+// NOTE:
+// Global hotkey (Carbon / NSEvent / CGEventTap) is intentionally disabled in Phase 1.
+// On macOS 27 + Swift 6 + SwiftPM builds, hotkey registration is unreliable due to
+// TCC / signing / event routing inconsistencies (Carbon returns noErr but the C
+// callback is never invoked; NSEvent monitors install but receive no events).
+//
+// We defer system-level input capture to Phase 2, after:
+//   - proper Developer ID signing
+//   - a .dmg / .pkg installer
+//   - settling on a known-good third-party library (e.g. KeyboardShortcuts) or
+//     a Raycast-style helper-app architecture
+//
+// In Phase 1, the supported way to summon the panel is the menu bar icon —
+// see StatusBarController. This is the right MVP boundary: the product is
+// "AI command palette", not "system input capturer".
 _ = AppLauncher.shared
 
 final class AppLauncher: NSObject, NSApplicationDelegate {
     static let shared = AppLauncher()
     var panel: SpotlightPanel!
-    var hotkey: HotkeyManager!
     var state: AppState!
 
     override init() {
@@ -32,14 +44,10 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
         FirstLaunchHelper.runIfNeeded()
 
         // Check Accessibility (do NOT prompt — that resets the grant
-        // every launch and causes NSEvent.addGlobalMonitorForEvents to silently
-        // fail. The user grants it once in System Settings; we just verify.)
+        // every launch. The user grants it once in System Settings; we just
+        // verify.)
         let trusted = AXIsProcessTrusted()
         Log.write("accessibility trusted=\(trusted)")
-
-        // Don't re-register Carbon hotkey from applicationDidFinishLaunching —
-        // do it ONCE on first run. Re-registering in-place causes -9878
-        // (already registered). The original start() is called below.
 
         let settings = SettingsStore()
         let keychain: KeychainStoring = KeychainStore()
@@ -67,18 +75,11 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
             }
         }
 
-        hotkey = HotkeyManager(keyCode: 49, carbonModifiers: 0x0900, onToggle: toggleAction)
-        hotkey.panel = panel
-        hotkey.start()
-        Log.write("hotkey.start() called (Carbon RegisterEventHotKey ⌥+Space)")
-
-        // Always-on menu bar icon — works as a fallback when the global hotkey
-        // can't be installed (macOS 14+ Input Monitoring permission is unreliable).
+        // Single, reliable entry point: the menu bar icon.
         _ = StatusBarController(onToggle: toggleAction)
         Log.write("status bar icon installed")
 
-        // First-launch UX: show panel once so the user sees the search experience
-        // before they have a working hotkey. They can rebind later in Settings.
+        // First-launch UX: show panel once so the user sees the search experience.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             Log.write("auto-toggling panel for first-time UX")
             self?.panel.toggle()
