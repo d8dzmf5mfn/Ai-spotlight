@@ -25,3 +25,9 @@ public protocol SearchProvider: Sendable {
     var name: String { get }
     func search(intent: Intent, limit: Int) async -> [SearchResult]
 }
+
+public extension SearchProvider {
+    func search(intent: Intent) async -> [SearchResult] {
+        await search(intent: intent, limit: 20)
+    }
+}
