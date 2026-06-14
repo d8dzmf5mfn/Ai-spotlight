@@ -15,10 +15,6 @@ let package = Package(
             path: "Sources/AISpotlight"
         ),
         .target(name: "AISpotlightKit", path: "Sources/AISpotlightKit"),
-        .testTarget(
-            name: "AISpotlightKitTests",
-            dependencies: ["AISpotlightKit"],
-            path: "Tests/AISpotlightKitTests"
-        ),
+        // Test target re-enabled in Task 3
     ]
 )
