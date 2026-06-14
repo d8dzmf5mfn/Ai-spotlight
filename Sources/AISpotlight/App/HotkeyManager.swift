@@ -8,6 +8,9 @@ final class HotkeyManager {
     private let onToggle: () -> Void
     private let modifiers: NSEvent.ModifierFlags
     private let keyCode: UInt16
+    /// Window to ignore events from (i.e. our own search field) so that
+    /// pressing ⌘+Space while typing doesn't hide the panel (B8 fix).
+    weak var panel: NSWindow?
 
     init(modifiers: NSEvent.ModifierFlags = .command, keyCode: UInt16 = 49, onToggle: @escaping () -> Void) {
         self.modifiers = modifiers
@@ -16,11 +19,14 @@ final class HotkeyManager {
     }
 
     func start() {
-        // Stop any existing monitor first (safe to call multiple times)
         stop()
         monitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return }
-            if event.keyCode == self.keyCode && event.modifierFlags.contains(self.modifiers) {
+            // B8: ignore events from our own panel's window
+            if let panel = self.panel, event.window === panel { return }
+            // B7: exact modifier match (not superset) — ⌘+Shift+Space should NOT toggle
+            let eventMods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if event.keyCode == self.keyCode && eventMods == self.modifiers {
                 DispatchQueue.main.async { self.onToggle() }
             }
         }

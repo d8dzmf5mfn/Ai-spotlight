@@ -6,7 +6,9 @@ final class SpotlightPanel: NSPanel {
         let contentRect = NSRect(x: 0, y: 0, width: 720, height: 400)
         super.init(
             contentRect: contentRect,
-            styleMask: [.borderless, .resizable, .nonactivatingPanel, .hudWindow],
+            // A1: drop .hudWindow (deprecated since macOS 10.12) and rely on
+            // SwiftUI's .ultraThinMaterial background for the vibrancy look.
+            styleMask: [.borderless, .resizable, .nonactivatingPanel],
             backing: .buffered, defer: false
         )
         self.isFloatingPanel = true
@@ -20,10 +22,10 @@ final class SpotlightPanel: NSPanel {
         self.hidesOnDeactivate = false
     }
 
+    // A2: with .nonactivatingPanel, canBecomeMain is silently ignored anyway.
+    // Remove the override so we don't lie about the panel's capabilities.
     override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
 
-    /// Show the panel (centered, slightly above mid-screen like Spotlight) or hide it.
     func toggle() {
         if isVisible { orderOut(nil); return }
         positionCenter()
@@ -33,7 +35,6 @@ final class SpotlightPanel: NSPanel {
     private func positionCenter() {
         guard let screen = NSScreen.main else { return }
         let vf = screen.visibleFrame
-        // Slightly above center, like real Spotlight
         let origin = NSPoint(
             x: vf.midX - frame.width / 2,
             y: vf.midY - frame.height / 2 + 200

@@ -9,12 +9,11 @@ struct SettingsView: View {
                 Picker("Provider", selection: $store.activeProvider) {
                     Text("None (rule-based only)").tag("none")
                     Text("OpenAI").tag("openai")
-                    Text("MiniMax").tag("minimax")
+                    // D2: MiniMax removed until Phase 2 implements MiniMaxProvider.
                 }
             }
             Section("API Keys") {
                 SecureField("OpenAI API Key", text: $store.openaiKey)
-                SecureField("MiniMax API Key", text: $store.minimaxKey)
                 Button("Save") { store.saveKeys() }
             }
             Section("Hotkey") {
