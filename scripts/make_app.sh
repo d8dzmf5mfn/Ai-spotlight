@@ -13,6 +13,21 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/AISpotlight "$APP/Contents/MacOS/AISpotlight"
 
+# Copy any *.bundle resources from built SPM products into the app's
+# Resources dir. SwiftPM executable targets don't auto-link their
+# resource bundles; without this, libraries like KeyboardShortcuts
+# crash with "could not find Bundle.module" the moment they try to
+# access a localized string. The right place for the bundles is
+# Contents/Resources/ (sibling of Contents/MacOS/).
+BUNDLE_COUNT=0
+for bundle in .build/release/*.bundle; do
+    if [ -d "$bundle" ]; then
+        cp -R "$bundle" "$APP/Contents/Resources/"
+        BUNDLE_COUNT=$((BUNDLE_COUNT + 1))
+    fi
+done
+echo "==> Copied $BUNDLE_COUNT resource bundle(s) into $APP/Contents/Resources/"
+
 # Copy the source Info.plist, then patch the executable path so it's
 # guaranteed to match the binary on disk (linker-signed ad-hoc builds
 # otherwise get an "Identifier=AISpotlight" mismatch that breaks TCC).
