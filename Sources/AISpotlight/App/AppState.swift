@@ -52,6 +52,10 @@ final class AppState: ObservableObject {
         guard let i = selection, results.indices.contains(i) else { return }
         let r = results[i]
         NSWorkspace.shared.open(r.url)
-        NSApp.keyWindow?.orderOut(nil)
+        // Close our panel. Iterate all NSApp.windows because keyWindow may
+        // have already been stolen by the just-launched app (e.g. Safari).
+        for w in NSApp.windows where w is SpotlightPanel {
+            w.orderOut(nil)
+        }
     }
 }

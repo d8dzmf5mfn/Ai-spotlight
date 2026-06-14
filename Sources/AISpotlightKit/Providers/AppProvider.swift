@@ -1,29 +1,27 @@
 import Foundation
 import AppKit
 
-public actor AppProvider: SearchProvider {
-    public nonisolated let name = "Apps"
+/// Scans `/Applications` + running apps. Uses a serial dispatch queue instead
+/// of an actor so the cache is populated synchronously in init (B5 fix: the
+/// first `search()` call always sees a populated cache).
+public final class AppProvider: SearchProvider, @unchecked Sendable {
+    public let name = "Apps"
     private var cached: [SearchResult] = []
+    private let lock = NSLock()
 
-    /// Synchronous initializer that populates the cache up front, so the first
-    /// `search()` call after init always sees a populated cache (B5 fix).
     public init() {
-        // Note: this runs on the caller's thread, which for AppDelegate is main.
-        // NSWorkspace + FileManager calls are safe here.
+        // sync scan on the caller's thread (always main, from AppDelegate)
         let results = Self.scan()
-        // We can't assign to actor-isolated state from a non-isolated init.
-        // Use a workaround: a Task that waits on nothing but sets the field.
-        Task { await self.setCache(results) }
+        lock.lock()
+        cached = results
+        lock.unlock()
     }
 
-    private func setCache(_ results: [SearchResult]) {
-        self.cached = results
-    }
-
-    /// Public refresh trigger so callers (e.g. after user installs an app)
-    /// can re-scan without restarting the process.
     public func refresh() async {
-        self.cached = Self.scan()
+        let results = Self.scan()
+        lock.lock()
+        cached = results
+        lock.unlock()
     }
 
     private static func scan() -> [SearchResult] {
@@ -55,7 +53,11 @@ public actor AppProvider: SearchProvider {
         guard case let .openApp(name) = intent else { return [] }
         let q = name.lowercased()
         struct Scored { let result: SearchResult; let isPrefix: Bool; let isSubstring: Bool }
-        let scored: [Scored] = cached
+        lock.lock()
+        let snapshot = cached
+        lock.unlock()
+
+        let scored: [Scored] = snapshot
             .map {
                 let lower = $0.title.lowercased()
                 return Scored(result: $0, isPrefix: lower.hasPrefix(q), isSubstring: lower.contains(q))

@@ -1,8 +1,10 @@
 import Foundation
 import CoreServices
 
-public actor FileSystemProvider: SearchProvider {
-    public nonisolated let name = "FileSystem"
+/// Synchronous Spotlight-based file search. Non-actor class so MDQuery
+/// results can be populated in init without async races.
+public final class FileSystemProvider: SearchProvider, @unchecked Sendable {
+    public let name = "FileSystem"
     public init() {}
 
     public func search(intent: Intent, limit: Int = 20) async -> [SearchResult] {

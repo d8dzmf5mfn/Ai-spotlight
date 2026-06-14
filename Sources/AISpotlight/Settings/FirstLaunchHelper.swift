@@ -10,6 +10,7 @@ enum FirstLaunchHelper {
 
     static func runIfNeeded() {
         let defaults = UserDefaults.standard
+        NSLog("[AISpotlight] FirstLaunchHelper.runIfNeeded: flag=%d", defaults.bool(forKey: shownKey) ? 1 : 0)
         guard !defaults.bool(forKey: shownKey) else { return }
         defaults.set(true, forKey: shownKey)
 

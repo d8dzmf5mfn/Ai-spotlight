@@ -6,9 +6,12 @@ final class SpotlightPanel: NSPanel {
         let contentRect = NSRect(x: 0, y: 0, width: 720, height: 400)
         super.init(
             contentRect: contentRect,
-            // A1: drop .hudWindow (deprecated since macOS 10.12) and rely on
-            // SwiftUI's .ultraThinMaterial background for the vibrancy look.
-            styleMask: [.borderless, .resizable, .nonactivatingPanel],
+            // Drop .nonactivatingPanel so the panel can become key/main properly.
+            // The downside is the panel may briefly steal focus when shown; we
+            // compensate by calling makeKeyAndOrderFront and immediately
+            // returning focus to the previous app is not possible — but the
+            // search field needs focus to be useful.
+            styleMask: [.borderless, .resizable],
             backing: .buffered, defer: false
         )
         self.isFloatingPanel = true
@@ -22,14 +25,18 @@ final class SpotlightPanel: NSPanel {
         self.hidesOnDeactivate = false
     }
 
-    // A2: with .nonactivatingPanel, canBecomeMain is silently ignored anyway.
-    // Remove the override so we don't lie about the panel's capabilities.
     override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
 
     func toggle() {
-        if isVisible { orderOut(nil); return }
+        if isVisible {
+            orderOut(nil)
+            return
+        }
         positionCenter()
+        // Make key so the search field receives input.
         makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private func positionCenter() {

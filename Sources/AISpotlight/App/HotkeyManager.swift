@@ -1,41 +1,98 @@
 import AppKit
-import Combine
+import Carbon.HIToolbox
 
-/// Listens for a global ⌘+Space keypress (or any configured combo) and fires `onToggle`.
-/// Requires Accessibility permission — first launch will trigger the system prompt.
+/// Global hotkey using Carbon's RegisterEventHotKey. This is the same API used
+/// by Spotlight, Alfred, Raycast, and other launchers. Requires no Accessibility
+/// or Input Monitoring permission — it registers at the WindowServer level.
+/// Tradeoff: the hotkey must not already be in use by macOS (e.g. ⌘+Space is
+/// owned by Spotlight, so a different combination must be chosen).
 final class HotkeyManager {
-    private var monitor: Any?
+    private var hotKeyRef: EventHotKeyRef?
+    private var eventHandler: EventHandlerRef?
     private let onToggle: () -> Void
-    private let modifiers: NSEvent.ModifierFlags
-    private let keyCode: UInt16
-    /// Window to ignore events from (i.e. our own search field) so that
-    /// pressing ⌘+Space while typing doesn't hide the panel (B8 fix).
+    private let keyCode: UInt32
+    private let modifiers: UInt32
     weak var panel: NSWindow?
 
-    init(modifiers: NSEvent.ModifierFlags = .command, keyCode: UInt16 = 49, onToggle: @escaping () -> Void) {
-        self.modifiers = modifiers
+    /// `modifiers` is a Carbon modifiers bitmask: cmdKey=256, option=2048, etc.
+    init(keyCode: UInt32 = UInt32(kVK_Space),
+         carbonModifiers: UInt32 = UInt32(cmdKey | optionKey),
+         onToggle: @escaping () -> Void) {
         self.keyCode = keyCode
+        self.modifiers = carbonModifiers
         self.onToggle = onToggle
     }
 
     func start() {
-        stop()
-        monitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self else { return }
-            // B8: ignore events from our own panel's window
-            if let panel = self.panel, event.window === panel { return }
-            // B7: exact modifier match (not superset) — ⌘+Shift+Space should NOT toggle
-            let eventMods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            if event.keyCode == self.keyCode && eventMods == self.modifiers {
-                DispatchQueue.main.async { self.onToggle() }
-            }
+        HotkeyManager.log("start: RegisterEventHotKey keyCode=\(keyCode) mods=\(modifiers)")
+        // Carbon hotkey signature: 4-byte code identifying our app's hotkey.
+        // 'ASP ' = 'A','I','S','P' as OSType (big-endian).
+        let signature: OSType = 0x41495053  // 'AIPS'
+        let hotKeyID = EventHotKeyID(signature: signature, id: 1)
+
+        // Install event handler that routes hotkey presses back to us.
+        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
+                                  eventKind: UInt32(kEventHotKeyPressed))
+        let selfPtr = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+        InstallEventHandler(
+            GetApplicationEventTarget(),
+            { _, eventRef, userData in
+                guard let userData = userData else { return noErr }
+                let mgr = Unmanaged<HotkeyManager>.fromOpaque(userData).takeUnretainedValue()
+                var receivedID = EventHotKeyID()
+                let err = GetEventParameter(
+                    eventRef,
+                    EventParamName(kEventParamDirectObject),
+                    EventParamType(typeEventHotKeyID),
+                    nil,
+                    MemoryLayout<EventHotKeyID>.size,
+                    nil,
+                    &receivedID
+                )
+                if err == noErr && receivedID.signature == 0x41495053 && receivedID.id == 1 {
+                    DispatchQueue.main.async { mgr.onToggle() }
+                }
+                return noErr
+            },
+            1,
+            &spec,
+            selfPtr,
+            &eventHandler
+        )
+
+        let status = RegisterEventHotKey(
+            keyCode,
+            modifiers,
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &hotKeyRef
+        )
+        if status == noErr {
+            HotkeyManager.log("start: RegisterEventHotKey OK (ref=\(hotKeyRef.map { String(describing: $0) } ?? "nil"))")
+        } else {
+            HotkeyManager.log("start: RegisterEventHotKey FAILED status=\(status) — likely already in use by system")
         }
     }
 
     func stop() {
-        if let m = monitor { NSEvent.removeMonitor(m) }
-        monitor = nil
+        if let ref = hotKeyRef { UnregisterEventHotKey(ref) }
+        if let h = eventHandler { RemoveEventHandler(h) }
+        hotKeyRef = nil
+        eventHandler = nil
     }
 
     deinit { stop() }
+
+    fileprivate static func log(_ msg: String) {
+        let line = "\(Date()) \(msg)\n"
+        let path = "/tmp/aispotlight-hotkey.log"
+        if let h = FileHandle(forWritingAtPath: path) {
+            h.seekToEndOfFile()
+            h.write(line.data(using: .utf8) ?? Data())
+            try? h.close()
+        } else {
+            try? line.data(using: .utf8)?.write(to: URL(fileURLWithPath: path))
+        }
+    }
 }

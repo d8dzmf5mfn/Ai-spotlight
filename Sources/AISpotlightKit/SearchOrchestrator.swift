@@ -1,6 +1,6 @@
 import Foundation
 
-public actor SearchOrchestrator {
+public final class SearchOrchestrator: @unchecked Sendable {
     private let providers: [SearchProvider]
 
     public init(providers: [SearchProvider]) {
