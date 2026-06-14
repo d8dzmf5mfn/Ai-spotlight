@@ -1,12 +1,14 @@
 import Foundation
 
 public enum QueryParser {
+    /// Parse a free-form query into an Intent. Trims whitespace first.
     public static func parse(_ raw: String) -> Intent {
-        let lower = raw.lowercased()
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
         // App open
-        if let m = matchApp(lower, raw: raw) { return m }
+        if let m = matchApp(lower, raw: trimmed) { return m }
         // File find
-        return matchFile(lower, raw: raw)
+        return matchFile(lower, raw: trimmed)
     }
 
     private static let openVerbsEN = ["open", "launch", "start", "run"]
@@ -28,17 +30,26 @@ public enum QueryParser {
     }
 
     private static func matchFile(_ lower: String, raw: String) -> Intent {
+        let tokens = lower.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        let tokenSet = Set(tokens)  // for exact-word verb matching (fixes substring bugs)
+
         var dateFilter: DateFilter?
-        if lower.contains("yesterday") || raw.contains("昨天") { dateFilter = .yesterday }
-        else if lower.contains("today") || raw.contains("今天") { dateFilter = .today }
+        if tokenSet.contains("yesterday") || raw.contains("昨天") { dateFilter = .yesterday }
+        else if tokenSet.contains("today") || raw.contains("今天") { dateFilter = .today }
         else if lower.contains("last week") || raw.contains("上周") { dateFilter = .lastWeek }
         else if lower.contains("last month") || raw.contains("上个月") { dateFilter = .lastMonth }
 
         var kind: FileKind?
-        if lower.contains("pdf") || raw.contains("PDF") { kind = .pdf }
-        else if lower.contains("image") || lower.contains("photo") || raw.contains("图片") { kind = .image }
+        // Match "pdf" as a standalone token, OR as the extension of any token (e.g. "report.pdf").
+        // The extension check restores the old behavior for the "find report.pdf" case.
+        let hasPdfToken = tokenSet.contains("pdf") || tokens.contains(where: { $0.hasSuffix(".pdf") })
+        let hasImageToken = tokenSet.contains("image") || tokenSet.contains("photo") || raw.contains("图片")
+        if hasPdfToken { kind = .pdf }
+        else if hasImageToken { kind = .image }
 
-        let hasFindVerb = findVerbsEN.contains(where: lower.contains)
+        // Verb detection: exact word match in tokens (not substring) — fixes
+        // "shower" matching "show" and "opening" matching "open".
+        let hasFindVerb = !Set(findVerbsEN).isDisjoint(with: tokenSet)
             || findVerbsCN.contains(where: raw.contains)
 
         if dateFilter != nil || kind != nil || hasFindVerb {
@@ -47,9 +58,18 @@ public enum QueryParser {
         return .unknown(raw: raw)
     }
 
+    /// Find a filename token: a word containing a dot, with trailing punctuation stripped.
+    /// "Find notes." → nil (trailing period stripped, then "notes" has no dot)
+    /// "find report.pdf" → "report.pdf"
     private static func extractName(_ raw: String) -> String? {
-        // Find token with a file extension
         let tokens = raw.split(separator: " ")
-        return tokens.first(where: { $0.contains(".") && $0.count > 2 }).map(String.init)
+        for token in tokens {
+            // Strip common trailing punctuation
+            let cleaned = token.trimmingCharacters(in: CharacterSet(charactersIn: ".,;:!?"))
+            if cleaned.contains(".") && cleaned.count > 2 {
+                return String(cleaned)
+            }
+        }
+        return nil
     }
 }
