@@ -1,0 +1,9 @@
+.DS_Store
+.build/
+.swiftpm/
+*.xcodeproj/
+Package.resolved
+Secrets.plist
+
+# Local test log (lives in ~/Documents, but ignore anywhere it shows up)
+AI-Spotlight-Testing.md
