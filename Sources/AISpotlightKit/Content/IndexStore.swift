@@ -116,6 +116,12 @@ public actor IndexStore {
     /// Build timestamp (refreshed on every `upsert`/`remove`).
     private var built: Date = .distantPast
 
+    /// Per-extension text extractors. Default is empty (Core has no
+    /// AppKit-bridged extractors). The App target injects
+    /// `RichTextExtractor`-backed dispatchers for `.rtf`, `.rtfd`,
+    /// `.html`, `.htm`. See `ExtensionTextDispatcher`.
+    public var dispatchers: [String: any ExtensionTextDispatcher] = [:]
+
     /// Load the on-disk snapshot if it exists; otherwise start empty.
     /// The disk file is **read once** at init; subsequent calls to
     /// `upsert`/`remove`/`persist` operate on the in-memory copy.
@@ -137,7 +143,18 @@ public actor IndexStore {
             }
         }
         self.built = snapshot.built
+        // If the App target has registered AppKit-bridged dispatchers
+        // (RTF / HTML extraction), inherit them into this store.
+        // The App target calls into the static stash before creating
+        // an IndexStore; we just copy it into our own `dispatchers`
+        // map.
+        self.dispatchers = IndexStore.pendingDispatchers
     }
+
+    /// Static stash for dispatcher registrations. The App target
+    /// (which can import AppKit) writes into this before creating an
+    /// IndexStore; the Core IndexStore reads from it in its init.
+    public static var pendingDispatchers: [String: any ExtensionTextDispatcher] = [:]
 
     /// Bulk-load the term index from a doc → terms map. Used by the
     /// indexer when re-building from scratch (faster than calling

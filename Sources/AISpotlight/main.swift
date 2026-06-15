@@ -1,8 +1,9 @@
 import AppKit
 import AISpotlightKit
+import AISpotlightMac
 import Foundation
 import SwiftUI
-
+import KeyboardShortcuts
 // Bootstrap log: first thing main.swift does, before any framework setup.
 // If everything after this fails, we'll still have proof that main.swift
 // was entered and how far execution got. See Log.bootstrap for why this
@@ -71,6 +72,12 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
 
         FirstLaunchHelper.runIfNeeded()
 
+        // Phase 3.2.2: wire the AppKit-bridged extractors into the
+        // Core IndexStore's dispatcher map. Without this, RTF/HTML
+        // files would fall through to the plain-UTF-8 path and
+        // return empty text.
+        injectAppKitDispatchers()
+
         // Check Accessibility (do NOT prompt — that resets the grant
         // every launch. The user grants it once in System Settings; we just
         // verify.)
@@ -131,6 +138,28 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
             self?.panel.toggle()
         }
     }
+
+    /// Inject the AppKit-bridged text extractors into the Core
+    /// IndexStore. Called once at startup so RTF/HTML files go
+    /// through `RichTextExtractor` instead of falling through to
+    /// the plain-UTF-8 path.
+    ///
+    /// This is a no-op when no IndexStore is wired up yet (3.1.5
+    /// IndexManager is still on hold). Re-architect Phase 4.
+    private func injectAppKitDispatchers() {
+        // The Core IndexStore is created lazily when the IndexManager
+        // runs. For now we expose the dispatcher map globally via a
+        // static: the next IndexStore that gets created will copy
+        // it. (Phase 4 will wire this properly.)
+        AppLauncher.pendingDispatchers = RichTextExtensionDispatcher.defaults
+        Log.write("AppKit dispatchers registered: \(RichTextExtensionDispatcher.defaults.count) extensions")
+    }
+
+    /// Stash for dispatcher registrations until an IndexStore is
+    /// available. (Phase 3.x: IndexManager is on hold; once it
+    /// returns, the IndexStore copies these into its own
+    /// `dispatchers` map at init.)
+    static var pendingDispatchers: [String: any ExtensionTextDispatcher] = [:]
 
     private func findTextField(in view: NSView?) -> NSTextField? {
         guard let v = view else { return nil }

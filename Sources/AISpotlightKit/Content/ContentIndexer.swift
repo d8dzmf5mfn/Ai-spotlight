@@ -285,18 +285,23 @@ public actor ContentIndexer {
         let mtime = (attrs[.modificationDate] as? Date) ?? Date()
         let size = (attrs[.size] as? Int) ?? 0
 
-        // Dispatch on extension. Plain text files use the fast path
-        // (read → UTF-8 decode). PDFs go through PDFKit. RTF/HTML
-        // go through NSAttributedString. Future extensions plug in
-        // here too.
+        // Dispatch on extension. The default Core path handles PDF
+        // (via PDFKit) and plain text. Mac extensions (RTF/HTML via
+        // NSAttributedString) are provided as an injected dispatcher
+        // by the App target, so the Core test target doesn't have
+        // to import AppKit (which is what causes the macOS 27 beta
+        // XCTest-host deadlock).
         let ext = url.pathExtension.lowercased()
         let text: String
-        switch ext {
-        case "pdf":
+        // `store.dispatchers` is actor-isolated. We hop briefly to read
+        // it; the result is a value-type dictionary so no real lock
+        // contention.
+        let dispatchers = await store.dispatchers
+        if let dispatcher = dispatchers[ext] {
+            text = (try? dispatcher.extract(url)) ?? ""
+        } else if ext == "pdf" {
             text = (try? PDFTextExtractor.extract(url)) ?? ""
-        case "rtf", "rtfd", "html", "htm":
-            text = (try? RichTextExtractor.extract(url)) ?? ""
-        default:
+        } else {
             // Plain text: read into memory, decode as UTF-8, skip if
             // the file is binary (the "file has .md extension but is
             // really a binary blob" case — not worth indexing).
