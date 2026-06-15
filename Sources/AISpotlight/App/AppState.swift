@@ -20,6 +20,15 @@ final class AppState: ObservableObject {
     @Published var isLLMBusy: Bool = false
     @Published var llmError: String? = nil
 
+    /// Phase 4.2.6: prior conversation turns, used to ground
+    /// follow-up questions in the LLM. We keep this as a
+    /// @Published so the SwiftUI view could (in a future
+    /// iteration) show a chat history above the LLM reply.
+    /// Capped at 12 messages (6 user + 6 assistant turns) in
+    /// the LLMConversationService, but stored here unbounded
+    /// so the cap is enforced at the boundary.
+    @Published var llmHistory: [LLMConversationService.HistoryEntry] = []
+
     private let interpreter: QueryInterpreter
     private let orchestrator: SearchOrchestrator
     /// Optional LLM conversation service. Nil when the user picked
@@ -175,7 +184,7 @@ final class AppState: ObservableObject {
             llmReply = "(No AI provider configured. Open Settings to pick Ollama or a custom endpoint.)"
             return
         }
-        Log.write("[AppState] runLLMAsk: starting streaming, q=\(query.prefix(60))")
+        Log.write("[AppState] runLLMAsk: starting streaming, q=\(query.prefix(60)), historyTurns=\(llmHistory.count / 2)")
         // Bump the generation counter; older in-flight tasks
         // that complete after this point will see the mismatch
         // and discard their results. This is the only safe
@@ -183,6 +192,7 @@ final class AppState: ObservableObject {
         // the old one was still running" without races.
         llmGeneration += 1
         let currentGeneration = llmGeneration
+        let historySnapshot = llmHistory
         llmTask?.cancel()
         isLLMBusy = true
         llmReply = ""
@@ -191,7 +201,7 @@ final class AppState: ObservableObject {
         llmTask = Task { [weak self] in
             do {
                 let context = await LLMContext.from(urls: contextURLs)
-                for try await chunk in service.askStreaming(query: query, context: context) {
+                for try await chunk in service.askStreamingWithHistory(query: query, history: historySnapshot, context: context) {
                     if Task.isCancelled { return }
                     await MainActor.run {
                         guard let self, self.llmGeneration == currentGeneration else { return }
@@ -202,21 +212,27 @@ final class AppState: ObservableObject {
                 await MainActor.run {
                     guard let self, self.llmGeneration == currentGeneration else { return }
                     self.isLLMBusy = false
-                }
-                Log.write("[AppState] runLLMAsk: stream done, llmReply length=\(self?.llmReply?.count ?? 0)")
-            } catch {
-                // Log IMMEDIATELY before any guard, so we can see
-                // whether the catch block runs at all.
-                Log.write("[AppState] runLLMAsk: catch entered, error=\(error), capturedGen=\(currentGeneration)")
-                let errMsg = Self.friendlyLLMError(error, provider: service)
-                Log.write("[AppState] runLLMAsk: friendly error=\(errMsg)")
-                await MainActor.run {
-                    let currentGen = self?.llmGeneration ?? -1
-                    Log.write("[AppState] runLLMAsk: catch in MainActor, captured=\(currentGeneration) current=\(currentGen)")
-                    guard let self, self.llmGeneration == currentGeneration else {
-                        Log.write("[AppState] runLLMAsk: MISMATCH — discarding old catch")
-                        return
+                    // Phase 4.2.6: append the user turn and
+                    // the assistant reply to the history so
+                    // the next ask has prior context. Cap at
+                    // 12 messages (6 user + 6 assistant) so
+                    // the prompt stays small for gemma2:2b's
+                    // 2K context window.
+                    self.llmHistory.append(.init(role: .user, text: query))
+                    self.llmHistory.append(.init(role: .assistant, text: self.llmReply ?? ""))
+                    if self.llmHistory.count > 12 {
+                        self.llmHistory.removeFirst(self.llmHistory.count - 12)
                     }
+                }
+                Log.write("[AppState] runLLMAsk: stream done, llmReply length=\(self?.llmReply?.count ?? 0), historyCount=\(self?.llmHistory.count ?? 0)")
+            } catch {
+                // With the new askStreaming impl, the catch
+                // block is guaranteed to run when the provider
+                // throws — even synchronously, even before
+                // any chunk is yielded.
+                let errMsg = Self.friendlyLLMError(error, provider: service)
+                await MainActor.run {
+                    guard let self, self.llmGeneration == currentGeneration else { return }
                     if Self.isURLCancelled(error) {
                         // Cancelled = user (or a new ask) interrupted
                         // us. Don't surface that as an error; just

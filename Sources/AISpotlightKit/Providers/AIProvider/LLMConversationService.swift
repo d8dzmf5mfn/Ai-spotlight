@@ -73,6 +73,22 @@ public final class LLMConversationService: @unchecked Sendable {
         return try await provider.ask(query: prompt, context: context)
     }
 
+    /// Phase 4.2.6: streaming ask with conversation history.
+    /// Most providers' default `askStreaming` impl wraps `ask`
+    /// in an AsyncThrowingStream that yields the full reply as
+    /// a single chunk. So we delegate to the provider's
+    /// streaming API; the provider-side `ask` will get the
+    /// history-enriched prompt. This is what the AppState
+    /// `runLLMAsk` calls so the user sees a streaming UI
+    /// (single chunk, but still the streaming pipe) and the
+    /// LLM gets the prior turns.
+    public func askStreamingWithHistory(query: String,
+                                       history: [HistoryEntry] = [],
+                                       context: LLMContext = .empty) -> AsyncThrowingStream<String, Error> {
+        let prompt = buildHistoryPrompt(query: query, history: history, context: context)
+        return provider.askStreaming(query: prompt, context: context)
+    }
+
     /// Build a prompt that includes the prior conversation, the
     /// context files, and the new question. The history is
     /// capped to the most recent 6 turns so we don't exceed the
