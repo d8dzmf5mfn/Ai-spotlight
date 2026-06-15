@@ -102,14 +102,21 @@ final class AppState: ObservableObject {
         Log.write("[AppState] runSearch done for q=\(q.prefix(60)), will NOT auto-ask")
     }
 
-    // MARK: - LLM ask (Phase 4.1.5)
+    // MARK: - LLM ask (Phase 4.1.5 + 4.2.x)
 
-    /// Phase 4.1.5 + 4.1.6: fire a streaming ask to the LLM. Each
-    /// chunk from the provider accumulates into `llmReply`, so
-    /// the SwiftUI view can render the answer as it arrives.
-    /// When the provider doesn't yet support true streaming
-    /// (Phase 4.1.6 default impl), the entire reply arrives as
-    /// a single chunk — same UX, no code change needed later.
+    /// Fire an ask to the LLM. The reply (or error) is published
+    /// to `llmReply` / `llmError` so the SwiftUI view updates live.
+    /// If the user typed a second ask before the first finished, we
+    /// cancel the in-flight task — only the most recent question
+    /// gets a reply.
+    ///
+    /// Phase 4.2.x error friendliness:
+    /// - NSURLError Code=-1004 (could not connect) — most likely
+    ///   Ollama isn't running. We translate to a clear "Ollama
+    ///   not running at localhost:11434" message so the user
+    ///   knows what to do.
+    /// - Other errors (HTTP 4xx/5xx, JSON decode) — show the
+    ///   raw error.
     private func runLLMAsk(query: String, contextURLs: [URL]) async {
         guard let service = llmService else {
             // No LLM configured — show a clear message in the UI.
@@ -119,6 +126,14 @@ final class AppState: ObservableObject {
         }
         Log.write("[AppState] runLLMAsk: starting streaming, q=\(query.prefix(60))")
         // Cancel any in-flight LLM call; only the most recent ask matters.
+        // We do NOT reset isLLMBusy=false here because the new task
+        // is about to set it to true. The previous task's catch
+        // block (if it was erroring) might fire AFTER this point
+        // and reset isLLMBusy, which would race with the new
+        // task. To prevent that, we set a generation counter and
+        // ignore the old task's outcome.
+        let generation = llmGeneration + 1
+        llmGeneration = generation
         llmTask?.cancel()
         isLLMBusy = true
         llmReply = ""
@@ -129,24 +144,63 @@ final class AppState: ObservableObject {
                 let context = await LLMContext.from(urls: contextURLs)
                 for try await chunk in service.askStreaming(query: query, context: context) {
                     if Task.isCancelled { return }
+                    // Ignore the old task's outcome if a newer
+                    // runLLMAsk has been started.
                     await MainActor.run {
-                        self?.llmReply = (self?.llmReply ?? "") + chunk
+                        guard let self, self.llmGeneration == generation else { return }
+                        self.llmReply = (self.llmReply ?? "") + chunk
                     }
                 }
                 if Task.isCancelled { return }
-                await MainActor.run { self?.isLLMBusy = false }
+                await MainActor.run {
+                    guard let self, self.llmGeneration == generation else { return }
+                    self.isLLMBusy = false
+                }
                 Log.write("[AppState] runLLMAsk: stream done, llmReply length=\(self?.llmReply?.count ?? 0)")
             } catch {
                 if Task.isCancelled { return }
-                let errMsg = (error as? LocalizedError)?.errorDescription
-                    ?? error.localizedDescription
+                let errMsg = Self.friendlyLLMError(error, provider: service)
                 await MainActor.run {
-                    self?.llmError = errMsg
-                    self?.isLLMBusy = false
+                    guard let self, self.llmGeneration == generation else { return }
+                    self.llmError = errMsg
+                    self.isLLMBusy = false
                 }
                 Log.write("[AppState] runLLMAsk ERROR: \(errMsg)")
             }
         }
+    }
+
+    /// Monotonic counter that lets us ignore the outcome of a
+    /// cancelled-but-still-running LLM task. Without this, a
+    /// slow Ollama response that arrives AFTER the user has
+    /// already pressed Enter on a new ask could clobber the
+    /// new ask's state. See the generation check in
+    /// `runLLMAsk`'s Task closure.
+    private var llmGeneration: Int = 0
+
+    /// Translate raw URLSession / HTTP errors into a message
+    /// the user can act on. NSURLError Code=-1004 ("Could not
+    /// connect to the server") on localhost:11434 almost
+    /// certainly means Ollama isn't running — that's the
+    /// 90% case and we should call it out.
+    private static func friendlyLLMError(_ error: Error, provider: LLMConversationService) -> String {
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain {
+            switch nsError.code {
+            case -1004: // Could not connect
+                return "Ollama is not running. Start it with: ollama serve"
+            case -1001: // Timed out
+                return "LLM timed out. The model may be too large for your Mac, or the prompt was too long."
+            case -1003: // Host not found
+                return "LLM host not found. Check Settings → AI Provider."
+            default:
+                return "LLM connection error (\(nsError.code)): \(error.localizedDescription)"
+            }
+        }
+        if let aiError = error as? AIProviderError {
+            return aiError.errorDescription ?? "AI provider error"
+        }
+        return error.localizedDescription
     }
 
     func moveSelection(_ delta: Int) {
