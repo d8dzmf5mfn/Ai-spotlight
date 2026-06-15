@@ -37,6 +37,73 @@ public final class LLMConversationService: @unchecked Sendable {
         return try await provider.ask(query: prompt, context: context)
     }
 
+    /// Phase 4.1.6: streaming ask. Yields the LLM's reply as a
+    /// stream of String chunks. Most providers' default impl
+    /// just yields the full reply as a single chunk — the SwiftUI
+    /// view can already render it that way. When a provider adds
+    /// true streaming (Phase 4.1.6.1), AppState doesn't change.
+    public func askStreaming(query: String, context: LLMContext = .empty) -> AsyncThrowingStream<String, Error> {
+        let prompt = buildPrompt(query: query, context: context)
+        return provider.askStreaming(query: prompt, context: context)
+    }
+
+    // MARK: - Conversation history (Phase 4.1.7)
+
+    /// One turn of the conversation. Capped to the last 6 turns
+    /// (12 messages: 6 user + 6 assistant) by `buildHistoryPrompt`
+    /// to keep prompts short for small-context Ollama models.
+    public struct HistoryEntry: Equatable, Sendable {
+        public enum Role: String, Sendable { case user, assistant }
+        public let role: Role
+        public let text: String
+        public init(role: Role, text: String) {
+            self.role = role
+            self.text = text
+        }
+    }
+
+    /// Ask with conversation history. The history is inlined into
+    /// the prompt as a "Previous conversation:" block. The user's
+    /// new question is appended at the end. `context` files
+    /// (if any) come after the history, before the question.
+    public func askWithHistory(query: String,
+                              history: [HistoryEntry] = [],
+                              context: LLMContext = .empty) async throws -> String {
+        let prompt = buildHistoryPrompt(query: query, history: history, context: context)
+        return try await provider.ask(query: prompt, context: context)
+    }
+
+    /// Build a prompt that includes the prior conversation, the
+    /// context files, and the new question. The history is
+    /// capped to the most recent 6 turns so we don't exceed the
+    /// context window of small models (e.g. gemma2:2b at 2K
+    /// tokens).
+    private func buildHistoryPrompt(query: String,
+                                    history: [HistoryEntry],
+                                    context: LLMContext) -> String {
+        var out = ""
+        if !history.isEmpty {
+            out += "Previous conversation:\n"
+            // Keep the most recent 6 turns. Older ones get dropped.
+            let recent = history.suffix(6)
+            for entry in recent {
+                let role = entry.role == .user ? "User" : "Assistant"
+                out += "\n\(role): \(entry.text)\n"
+            }
+            out += "\n"
+        }
+        if !context.urls.isEmpty {
+            out += "Context files:\n"
+            for (i, url) in context.urls.enumerated() {
+                let snippet = readSnippet(url: url)
+                out += "\n[File \(i + 1): \(url.path)]\n\(snippet)\n[/File \(i + 1)]\n"
+            }
+            out += "\n"
+        }
+        out += "Question: \(query)\n"
+        return out
+    }
+
     // MARK: - Prompt building
 
     /// Format the prompt. We don't try to be clever here — the

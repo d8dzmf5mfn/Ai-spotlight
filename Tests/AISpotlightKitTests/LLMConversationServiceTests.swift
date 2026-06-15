@@ -104,6 +104,59 @@ final class LLMConversationServiceTests: XCTestCase {
         }
     }
 
+    // MARK: - Conversation history (Phase 4.1.7)
+
+    func testAskWithHistoryIncludesHistoryInPrompt() async throws {
+        let fake = FakeAIProvider(replyToAsk: "ok")
+        let service = LLMConversationService(provider: fake)
+
+        let history: [LLMConversationService.HistoryEntry] = [
+            .init(role: .user, text: "What is polyester?"),
+            .init(role: .assistant, text: "Polyester is a polymer."),
+        ]
+        _ = try? await service.askWithHistory(query: "And what about nylon?",
+                                             history: history)
+        let prompt = fake.capturedPrompts[0] as? String ?? ""
+        XCTAssertTrue(prompt.contains("What is polyester?"),
+                      "Prompt should include prior user turn. Got: \(prompt)")
+        XCTAssertTrue(prompt.contains("Polyester is a polymer."),
+                      "Prompt should include prior assistant turn. Got: \(prompt)")
+        XCTAssertTrue(prompt.contains("And what about nylon?"),
+                      "Prompt should include the new question. Got: \(prompt)")
+    }
+
+    func testAskWithEmptyHistoryBehavesLikeAsk() async throws {
+        let fake = FakeAIProvider(replyToAsk: "hi")
+        let service = LLMConversationService(provider: fake)
+        let reply = try await service.askWithHistory(query: "hello?")
+        XCTAssertEqual(reply, "hi")
+    }
+
+    // MARK: - Streaming (Phase 4.1.6)
+
+    func testAskStreamingYieldsReply() async throws {
+        let fake = FakeAIProvider(replyToAsk: "streamed reply")
+        let service = LLMConversationService(provider: fake)
+        let stream = service.askStreaming(query: "hello")
+        var collected = ""
+        for try await chunk in stream {
+            collected += chunk
+        }
+        XCTAssertEqual(collected, "streamed reply")
+    }
+
+    func testAskStreamingPropagatesError() async {
+        let fake = BoomProvider()
+        let service = LLMConversationService(provider: fake)
+        let stream = service.askStreaming(query: "hello")
+        do {
+            for try await _ in stream { XCTFail("Expected no chunks") }
+            XCTFail("Expected error to propagate")
+        } catch {
+            // OK
+        }
+    }
+
     /// Test-only provider that throws on every call.
     final class BoomProvider: AIProvider, @unchecked Sendable {
         let name = "Boom"

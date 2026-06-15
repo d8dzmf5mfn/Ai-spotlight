@@ -82,11 +82,12 @@ final class AppState: ObservableObject {
 
     // MARK: - LLM ask (Phase 4.1.5)
 
-    /// Fire an ask to the LLM. The reply (or error) is published
-    /// to `llmReply` / `llmError` so the SwiftUI view updates live.
-    /// If the user typed a second ask before the first finished, we
-    /// cancel the in-flight task — only the most recent question
-    /// gets a reply.
+    /// Phase 4.1.5 + 4.1.6: fire a streaming ask to the LLM. Each
+    /// chunk from the provider accumulates into `llmReply`, so
+    /// the SwiftUI view can render the answer as it arrives.
+    /// When the provider doesn't yet support true streaming
+    /// (Phase 4.1.6 default impl), the entire reply arrives as
+    /// a single chunk — same UX, no code change needed later.
     private func runLLMAsk(query: String, contextURLs: [URL]) async {
         guard let service = llmService else {
             // No LLM configured — show a clear message in the UI.
@@ -96,18 +97,20 @@ final class AppState: ObservableObject {
         // Cancel any in-flight LLM call; only the most recent ask matters.
         llmTask?.cancel()
         isLLMBusy = true
-        llmReply = nil
+        llmReply = ""
         llmError = nil
 
         llmTask = Task { [weak self] in
             do {
                 let context = await LLMContext.from(urls: contextURLs)
-                let reply = try await service.ask(query: query, context: context)
-                if Task.isCancelled { return }
-                await MainActor.run {
-                    self?.llmReply = reply
-                    self?.isLLMBusy = false
+                for try await chunk in service.askStreaming(query: query, context: context) {
+                    if Task.isCancelled { return }
+                    await MainActor.run {
+                        self?.llmReply = (self?.llmReply ?? "") + chunk
+                    }
                 }
+                if Task.isCancelled { return }
+                await MainActor.run { self?.isLLMBusy = false }
             } catch {
                 if Task.isCancelled { return }
                 await MainActor.run {

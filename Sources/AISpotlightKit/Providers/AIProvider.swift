@@ -35,12 +35,21 @@ public protocol AIProvider: Sendable {
     /// (no LLM call) for providers that can; slow path (LLM call)
     /// for ones that can't.
     func classify(_ query: String) async throws -> Intent
-    /// Phase 4: ask the LLM a question, optionally grounded in
+    /// Phase 4.1: ask the LLM a question, optionally grounded in
     /// `context`. Returns the LLM's reply as a plain String.
     /// Default implementation throws "not supported" so existing
     /// providers don't need to implement this until they're
     /// updated.
     func ask(query: String, context: LLMContext) async throws -> String
+    /// Phase 4.1.6: streaming variant. Returns the LLM's reply
+    /// as a stream of String chunks (one per `delta.content` from
+    /// the SSE response). Most providers can implement this
+    /// cheaply by returning `AsyncThrowingStream { continuation in
+    /// let reply = try await ask(...); continuation.yield(reply); continuation.finish() }`
+    /// until true streaming is implemented. Default impl does
+    /// exactly that — so adding `askStreaming` is a 1-line change
+    /// in AppState, not a refactor.
+    func askStreaming(query: String, context: LLMContext) -> AsyncThrowingStream<String, Error>
 }
 
 public extension AIProvider {
@@ -49,6 +58,23 @@ public extension AIProvider {
     /// checks via the protocol conformance at runtime.
     func ask(query: String, context: LLMContext) async throws -> String {
         throw AIProviderError.notSupportedYet(self.name)
+    }
+
+    /// Default streaming impl: collect the full reply and yield
+    /// it as a single chunk. Override only when the underlying
+    /// provider can do true delta-by-delta streaming.
+    func askStreaming(query: String, context: LLMContext) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    let reply = try await self.ask(query: query, context: context)
+                    if !reply.isEmpty { continuation.yield(reply) }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
     }
 }
 
