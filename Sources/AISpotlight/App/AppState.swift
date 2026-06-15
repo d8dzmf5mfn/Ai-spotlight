@@ -157,46 +157,62 @@ final class AppState: ObservableObject {
     }
 
     /// Called when the user presses Enter in the search field.
-    /// If the most recent query was classified as a free-form
-    /// LLM question, fire the LLM ask (and clear the input
-    /// field). Otherwise, open the selected search result.
+    /// Priority: a selected search result wins over a free-form
+    /// LLM question, matching Spotlight / Raycast behavior.
     ///
-    /// Phase 4.2.x: This is the ONLY way the LLM gets asked —
-    /// `onQueryChange` (debounced) only updates the search
-    /// preview, never the LLM. This is what the user expects:
-    /// typing is search-preview, Enter is commit.
+    /// Phase 4.2.x rationale:
+    /// 1. If the user has highlighted a result (arrow keys) and
+    ///    presses Enter, open that result. This is the
+    ///    Spotlight expectation.
+    /// 2. If there's no result (e.g. they typed a free-form
+    ///    question that produced no file match), AND the
+    ///    intent is .ask, fire the LLM.
+    /// 3. Otherwise, fall back to opening the first result
+    ///    (or do nothing if results is empty).
+    ///
+    /// Without the "selected result wins" rule, the user
+    /// would type 'tell me about polyester' — see
+    /// 'polyester.md' appear in the result list — and then
+    /// press Enter expecting to open the file, only to
+    /// silently trigger the LLM. That's a bad Spotlight
+    /// emulation. The current rule fixes that.
     func activate() async {
-        // Re-classify the current query against the (cached)
-        // interpreter. The cache makes this near-O(1) in
-        // practice. If the cache is cold (e.g. user pasted
-        // text and immediately pressed Enter in <600ms), the
-        // interpreter will route through the LLM router and
-        // back to the rule parser; either way we get an Intent.
+        // Priority 1: a highlighted result always wins.
+        if let i = selection, results.indices.contains(i) {
+            let r = results[i]
+            // Command pseudo-results (settings, quit) take
+            // the same path as before.
+            if let cmd = r.command {
+                switch cmd {
+                case .openSettings:
+                    NotificationCenter.default.post(name: .aispotlightOpenSettings, object: nil)
+                case .quit:
+                    NSApp.terminate(nil)
+                }
+                closePanel()
+                return
+            }
+            NSWorkspace.shared.open(r.url)
+            closePanel()
+            return
+        }
+
+        // Priority 2: no selection, intent is .ask → fire the
+        // LLM. This is the free-form question path.
         let intent = await interpreter.interpret(query)
         if case .ask(let q, let contextURLs) = intent {
-            Log.write("[AppState] activate: user pressed Enter on ask query, dispatching LLM")
+            Log.write("[AppState] activate: no selection + ask intent, dispatching LLM")
             await runLLMAsk(query: q, contextURLs: contextURLs)
             self.query = ""
             return
         }
 
-        guard let i = selection, results.indices.contains(i) else { return }
-        let r = results[i]
-
-        // Handle commands first — they don't go through NSWorkspace.
-        if let cmd = r.command {
-            switch cmd {
-            case .openSettings:
-                NotificationCenter.default.post(name: .aispotlightOpenSettings, object: nil)
-            case .quit:
-                NSApp.terminate(nil)
-            }
-            closePanel()
-            return
-        }
-
-        NSWorkspace.shared.open(r.url)
-        closePanel()
+        // Priority 3: no selection, non-ask intent (e.g. a
+        // typo like "asdf" that the rule parser gave up on
+        // and the LLM router returned .unknown for). Do
+        // nothing — the user can either pick a result, keep
+        // typing, or press Escape.
+        Log.write("[AppState] activate: no selection and no ask intent, doing nothing")
     }
 
     private func closePanel() {
