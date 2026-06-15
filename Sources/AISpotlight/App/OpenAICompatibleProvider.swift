@@ -44,7 +44,15 @@ public final class OpenAICompatibleProvider: AIProvider, @unchecked Sendable {
         // json_mode: we want a free-form String back, not a JSON
         // object.
         let body = try Self.encodeAskBody(model: config.model, query: query)
-        return try await sendChat(body: body, jsonMode: false)
+        Log.write("[OpenAICompatibleProvider.ask] POSTing to \(config.baseURL) model=\(config.model) queryLen=\(query.count)")
+        do {
+            let reply = try await sendChat(body: body, jsonMode: false)
+            Log.write("[OpenAICompatibleProvider.ask] reply received, length=\(reply.count)")
+            return reply
+        } catch {
+            Log.write("[OpenAICompatibleProvider.ask] ERROR: \(error)")
+            throw error
+        }
     }
 
     // MARK: - Wire format

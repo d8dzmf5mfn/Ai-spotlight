@@ -39,9 +39,20 @@ final class AppState: ObservableObject {
     }
 
     func onQueryChange(_ newQuery: String) {
+        // Debounce: cancel the previous search task but wait
+        // ~600ms after the last keystroke before firing. The 600ms
+        // is a balance: too short and we hammer the LLM with
+        // intermediate queries; too long and the UI feels laggy.
+        // Note: the in-flight LLM streaming call is also cancelled
+        // by this — once the LLM starts streaming, the user's
+        // keystrokes that change the query cancel the stream and
+        // restart. That's intentional (matches Spotlight/Raycast
+        // behavior) but means the LLM provider should be cheap
+        // to cancel mid-stream (it is for Ollama).
         searchTask?.cancel()
+        llmTask?.cancel()
         debounceTimer?.invalidate()
-        debounceTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: false) { [weak self] _ in
+        debounceTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: false) { [weak self] _ in
             guard let self else { return }
             self.searchTask = Task { await self.runSearch(newQuery) }
         }
@@ -73,10 +84,12 @@ final class AppState: ObservableObject {
         // `llmReply`. The SwiftUI view shows the reply as a separate
         // section under the result list.
         if case .ask(let query, let contextURLs) = intent {
+            Log.write("[AppState] Intent.ask detected: q=\(query.prefix(60)) contextURLs=\(contextURLs.count)")
             await runLLMAsk(query: query, contextURLs: contextURLs)
         } else {
             // Non-ask query: clear any prior LLM state.
             llmReply = nil; llmError = nil
+            Log.write("[AppState] Intent is not ask: \(intent)")
         }
     }
 
@@ -91,9 +104,11 @@ final class AppState: ObservableObject {
     private func runLLMAsk(query: String, contextURLs: [URL]) async {
         guard let service = llmService else {
             // No LLM configured — show a clear message in the UI.
+            Log.write("[AppState] runLLMAsk: NO llmService configured")
             llmReply = "(No AI provider configured. Open Settings to pick Ollama or a custom endpoint.)"
             return
         }
+        Log.write("[AppState] runLLMAsk: starting streaming, q=\(query.prefix(60))")
         // Cancel any in-flight LLM call; only the most recent ask matters.
         llmTask?.cancel()
         isLLMBusy = true
@@ -111,13 +126,16 @@ final class AppState: ObservableObject {
                 }
                 if Task.isCancelled { return }
                 await MainActor.run { self?.isLLMBusy = false }
+                Log.write("[AppState] runLLMAsk: stream done, llmReply length=\(self?.llmReply?.count ?? 0)")
             } catch {
                 if Task.isCancelled { return }
+                let errMsg = (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription
                 await MainActor.run {
-                    self?.llmError = (error as? LocalizedError)?.errorDescription
-                        ?? error.localizedDescription
+                    self?.llmError = errMsg
                     self?.isLLMBusy = false
                 }
+                Log.write("[AppState] runLLMAsk ERROR: \(errMsg)")
             }
         }
     }

@@ -23,12 +23,16 @@ public enum Log {
     }
 
     /// Append a line to the log. Safe to call from any thread.
+    /// Uses fsync so debug logs are visible immediately when
+    /// tailing the file — the in-memory `FileHandle` close
+    /// path was buffering output and we lost debugging context
+    /// during Phase 4.1 bring-up.
     public static func write(_ msg: String) {
         let line = "\(Date()) \(msg)\n"
-        if let h = try? FileHandle(forWritingAtPath: url.path) {
-            h.seekToEndOfFile()
-            h.write(Data(line.utf8))
-            try? h.close()
-        }
+        guard let h = try? FileHandle(forWritingAtPath: url.path) else { return }
+        h.seekToEndOfFile()
+        h.write(Data(line.utf8))
+        try? h.synchronize()  // force fsync
+        try? h.close()
     }
 }

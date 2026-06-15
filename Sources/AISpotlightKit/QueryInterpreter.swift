@@ -40,11 +40,14 @@ public actor QueryInterpreter {
             // for "map this to a find/open intent" but the new
             // shape is "ask the LLM directly".
             //
-            // Any throw falls back to .unknown so the rest of the
-            // pipeline still works without an LLM.
-            final = (try? await ai.ask(query: trimmed, context: .empty)).map {
-                .ask(query: $0.isEmpty ? trimmed : $0, contextURLs: [])
-            } ?? parsed
+            // We DO build an Intent.ask even if the initial
+            // synchronous `ai.ask(...)` call is going to fail (e.g.
+            // because the user kept typing and the previous
+            // in-flight call was cancelled). Intent.ask + empty
+            // context is the canonical signal to AppState that it
+            // should re-issue the ask with the latest query —
+            // AppState.runLLMAsk handles the streaming + retry.
+            final = .ask(query: trimmed, contextURLs: [])
         } else {
             final = parsed
         }
