@@ -86,6 +86,14 @@ final class AppState: ObservableObject {
         if case .ask(let query, let contextURLs) = intent {
             Log.write("[AppState] Intent.ask detected: q=\(query.prefix(60)) contextURLs=\(contextURLs.count)")
             await runLLMAsk(query: query, contextURLs: contextURLs)
+            // Phase 4.2: clear the input field after the ask is
+            // dispatched, so the user sees the LLM reply in the
+            // panel without the original question still in the
+            // text field. Without this, the panel looks cluttered
+            // (the user typed it, the LLM answered, but the
+            // text field still shows the question). The debounce
+            // already prevents re-firing on this same query.
+            self.query = ""
         } else {
             // Non-ask query: clear any prior LLM state.
             llmReply = nil; llmError = nil

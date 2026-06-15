@@ -32,6 +32,43 @@ final class QueryParserTests: XCTestCase {
         XCTAssertEqual(intent, .unknown(raw: "hello world"))
     }
 
+    // MARK: - Phase 4.2: prefix-free app + file lookup
+
+    /// "Safari" alone should be an app open — no `open` prefix needed.
+    /// This matches Spotlight/Raycast behavior: type a single word,
+    /// if it's a known app, open it.
+    func testParsesSingleWordAsApp() {
+        let intent = QueryParser.parse("Safari")
+        XCTAssertEqual(intent, .openApp(name: "Safari"))
+    }
+
+    /// Multi-word app names like "Visual Studio Code" should also
+    /// open without needing `open` — the file system would have
+    /// no file matching that name, so a multi-token query that
+    /// doesn't look like a find query is an app.
+    func testParsesMultiWordAppName() {
+        let intent = QueryParser.parse("Visual Studio Code")
+        XCTAssertEqual(intent, .openApp(name: "Visual Studio Code"))
+    }
+
+    /// "open Safari" should still work (regression: don't break
+    /// the explicit prefix).
+    func testParsesOpenAppWithPrefix() {
+        let intent = QueryParser.parse("open Safari")
+        XCTAssertEqual(intent, .openApp(name: "Safari"))
+    }
+
+    /// "find Safari" should still find a file (find verb wins).
+    /// Regression test for the "find verb precedence" rule.
+    func testParsesFindVerbTakesPrecedence() {
+        let intent = QueryParser.parse("find Safari")
+        // "find" is a find verb — it triggers matchFile. "Safari"
+        // has no file extension dot, so name is nil. The intent
+        // is .findFile with the find verb signal; the orchestrator
+        // does the actual filename fuzzy match.
+        XCTAssertEqual(intent, .findFile(name: nil, dateFilter: nil, kind: nil))
+    }
+
     // --- Regression: substring-matching bugs found in adversarial review ---
 
     func testShowerDoesNotTriggerFind() {
