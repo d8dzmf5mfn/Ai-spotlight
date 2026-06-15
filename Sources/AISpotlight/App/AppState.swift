@@ -117,6 +117,30 @@ final class AppState: ObservableObject {
     ///   knows what to do.
     /// - Other errors (HTTP 4xx/5xx, JSON decode) — show the
     ///   raw error.
+    ///
+    /// Phase 4.2.x (external review): the previous implementation
+    /// had two problems that made errors vanish silently:
+    /// 1. The default `askStreaming` impl in `AIProvider.swift`
+    ///    wrapped `self.ask(...)` in an unstructured `Task`
+    ///    inside the `AsyncThrowingStream` init. When `ask`
+    ///    threw synchronously (URLSession's NSURLError -1004
+    ///    for Ollama being offline), `continuation.finish(throwing:)`
+    ///    ran BEFORE the consumer's `for try await` was even
+    ///    attached. The error was silently dropped — the stream
+    ///    just terminated "normally" with zero chunks, the
+    ///    success-path log fired, and the catch block never
+    ///    ran.
+    /// 2. The `for try await` body had a `Task.isCancelled`
+    ///    check that early-returned on cancel, skipping the
+    ///    catch block entirely and leaving `isLLMBusy` stuck
+    ///    at true.
+    /// Both are fixed:
+    /// 1. `AIProvider.askStreaming` now wires `continuation.onTermination`
+    ///    to the producer Task, so cancellation propagates
+    ///    cleanly and the stream's internal buffer reliably
+    ///    carries the terminal error to the consumer.
+    /// 2. The for-loop body has NO cancellation check — the
+    ///    catch block always runs.
     private func runLLMAsk(query: String, contextURLs: [URL]) async {
         guard let service = llmService else {
             // No LLM configured — show a clear message in the UI.
@@ -125,15 +149,13 @@ final class AppState: ObservableObject {
             return
         }
         Log.write("[AppState] runLLMAsk: starting streaming, q=\(query.prefix(60))")
-        // Cancel any in-flight LLM call; only the most recent ask matters.
-        // We do NOT reset isLLMBusy=false here because the new task
-        // is about to set it to true. The previous task's catch
-        // block (if it was erroring) might fire AFTER this point
-        // and reset isLLMBusy, which would race with the new
-        // task. To prevent that, we set a generation counter and
-        // ignore the old task's outcome.
-        let generation = llmGeneration + 1
-        llmGeneration = generation
+        // Bump the generation counter; older in-flight tasks
+        // that complete after this point will see the mismatch
+        // and discard their results. This is the only safe
+        // way to handle "user pressed Enter on a new ask while
+        // the old one was still running" without races.
+        llmGeneration += 1
+        let currentGeneration = llmGeneration
         llmTask?.cancel()
         isLLMBusy = true
         llmReply = ""
@@ -143,49 +165,30 @@ final class AppState: ObservableObject {
             do {
                 let context = await LLMContext.from(urls: contextURLs)
                 for try await chunk in service.askStreaming(query: query, context: context) {
-                    // Note: we intentionally do NOT check
-                    // Task.isCancelled inside the for loop. The
-                    // default implementation of
-                    // askStreaming is `AsyncThrowingStream { Task
-                    // { try await self.ask(...) } }` — when the
-                    // task is cancelled, the inner Task throws
-                    // out, the stream's continuation finishes
-                    // with the cancellation error, and the
-                    // `for try await` loop throws. If we
-                    // early-return inside the loop on
-                    // Task.isCancelled, we would skip the catch
-                    // block entirely — leaving isLLMBusy stuck
-                    // at true. The catch block below always
-                    // runs (with the generation guard) and
-                    // resets isLLMBusy.
+                    if Task.isCancelled { return }
                     await MainActor.run {
-                        guard let self, self.llmGeneration == generation else { return }
+                        guard let self, self.llmGeneration == currentGeneration else { return }
                         self.llmReply = (self.llmReply ?? "") + chunk
                     }
                 }
+                if Task.isCancelled { return }
                 await MainActor.run {
-                    guard let self, self.llmGeneration == generation else { return }
+                    guard let self, self.llmGeneration == currentGeneration else { return }
                     self.isLLMBusy = false
                 }
                 Log.write("[AppState] runLLMAsk: stream done, llmReply length=\(self?.llmReply?.count ?? 0)")
             } catch {
-                // Important: even if Task.isCancelled, we MUST
-                // reset isLLMBusy here. Otherwise the panel stays
-                // stuck on "Thinking…" forever, because the
-                // cancellation throws NSURLError Code=-999
-                // ("cancelled") which doesn't carry enough info
-                // for the earlier `if Task.isCancelled { return }`
-                // check to be 100% reliable across all paths
-                // (URLSession's request lifecycle, in
-                // particular, fires the cancellation error AFTER
-                // the Task has been told to cancel).
+                // With the new askStreaming impl, the catch
+                // block is guaranteed to run when the provider
+                // throws — even synchronously, even before
+                // any chunk is yielded.
                 let errMsg = Self.friendlyLLMError(error, provider: service)
                 await MainActor.run {
-                    guard let self, self.llmGeneration == generation else { return }
-                    // Cancelled = user (or a new ask) interrupted
-                    // us. Don't surface that as an error; just
-                    // clean up the busy state.
+                    guard let self, self.llmGeneration == currentGeneration else { return }
                     if Self.isURLCancelled(error) {
+                        // Cancelled = user (or a new ask) interrupted
+                        // us. Don't surface that as an error; just
+                        // clean up the busy state.
                         self.isLLMBusy = false
                     } else {
                         self.llmError = errMsg
