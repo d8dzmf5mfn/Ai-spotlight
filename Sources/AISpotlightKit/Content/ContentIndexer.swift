@@ -268,6 +268,11 @@ public actor ContentIndexer {
     /// the actor; we don't need a separate lock.
     private var existingDocumentMtimes: [URL: Date] = [:]
     private var existingDocumentSizes: [URL: Int] = [:]
+    /// Phase 4.2.7: DocID map parallel to mtimes/sizes, so the
+    /// final bulkLoad can pass DocIDs to the store and skip the
+    /// URL→DocID allocation. This keeps the ingest path O(N)
+    /// in DocID assignment rather than O(N²) in URL hashing.
+    private var existingDocumentDocIDs: [URL: Int32] = [:]
     /// The path of the index file itself (e.g. `~/.../index.json`). We
     /// skip this during the walk so a re-index doesn't index its own
     /// serialized snapshot — a feedback loop that grows the index
@@ -295,9 +300,13 @@ public actor ContentIndexer {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             let snapshot = try decoder.decode(IndexSnapshot.self, from: data)
-            for doc in snapshot.documents {
+            for (docID, doc) in snapshot.documents {
                 existingDocumentMtimes[doc.url] = doc.mtime
                 existingDocumentSizes[doc.url] = doc.byteSize
+                // Track DocID so we can pass it to bulkLoad
+                // later (Phase 4.2.7 design — bulkLoad keys
+                // by DocID, not URL).
+                existingDocumentDocIDs[doc.url] = docID
             }
         } catch {
             // No file yet, or unreadable — start with empty caches.

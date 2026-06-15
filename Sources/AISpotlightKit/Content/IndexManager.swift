@@ -16,18 +16,32 @@ import Combine
 @MainActor
 public final class IndexManager: ObservableObject {
     /// Default directories the indexer walks if the user hasn't
-    /// The user's default index roots. Just `~/Documents` for
-    /// the zero-friction default — `~/Downloads` is full of
-    /// `.zip` / `.dmg` / `.iso` / `.pkg` files that inflate the
-    /// inverted index (Phase 3.1.5 measured 4-5 GB RSS for
-    /// 80k files across both directories). Users who want
-    /// Downloads indexed can add it via the IndexManager
-    /// init's `customRoots` parameter, or in Settings
-    /// (Phase 4.2.1).
+    /// The user's default index roots. Documents + Downloads +
+    /// Desktop + Projects (only those that exist on disk).
+    ///
+    /// **Phase 4.2.7** expansion: now that the DocID refactor
+    /// shrunk the in-memory index from 5GB → ~500MB on a
+    /// typical user volume, we can re-include `~/Downloads`
+    /// (the major source of pre-refactor bloat — .zip / .dmg /
+    /// .iso / .pkg files inflated the inverted index). The
+    /// user can still add/remove folders in Settings
+    /// (Phase 4.2.7 Settings UI is the next step).
+    ///
+    /// Phase 3.1.5 measured 4-5 GB RSS for 80k files across
+    /// just Documents + Downloads. With the Set<Int32> posting
+    /// list, the same index is 200-500MB.
     public static let defaultRoots: [URL] = {
         let fm = FileManager.default
         var dirs: [URL] = []
-        for type: FileManager.SearchPathDirectory in [.documentDirectory] {
+        // Standard Apple-canonical directories via the
+        // SearchPathDirectory API. .documentDirectory resolves
+        // to ~/Documents on user volumes; .downloadsDirectory
+        // is symlinked to ~/Downloads (which is what we want).
+        for type: FileManager.SearchPathDirectory in [
+            .documentDirectory,
+            .downloadsDirectory,
+            .desktopDirectory,
+        ] {
             if let url = fm.urls(for: type, in: .userDomainMask).first {
                 dirs.append(url)
             }
