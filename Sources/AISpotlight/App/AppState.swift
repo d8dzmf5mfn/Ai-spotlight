@@ -88,28 +88,46 @@ final class AppState: ObservableObject {
             self.selection = r.isEmpty ? nil : 0
         }
 
-        // Phase 4.2.x: do NOT auto-trigger LLM ask here. We
-        // classify the intent (so the user can see the preview
-        // state), but the actual LLM streaming is gated on
-        // user confirmation (press Enter). Without this, every
-        // keystroke past 0.6s of inactivity would silently
-        // start a 5-10s Ollama call, hammering the LLM and
-        // making the UI feel like it's "thinking" without the
-        // user asking. The LLM ask is fired from
-        // `activate()` (user pressed Enter) below.
+        // Phase 4.2.x + 4.2.5: populate the LLM context
+        // candidate URLs. When the user types a question-style
+        // query, we save the top file matches so the eventual
+        // LLM ask (when the user presses Enter) can ground its
+        // reply in those file contents. This is the "B" use
+        // case: 'tell me about polyester' → search finds
+        // polyester notes → Enter → LLM reads them → reply.
+        //
+        // For non-ask queries (find/open), we clear the
+        // context list — the user wants files, not LLM
+        // interpretation.
         if case .ask = intent {
-            // Don't clear LLM state here — we want the user to
-            // see the AI section header so they know pressing
-            // Enter will ask the LLM. Just keep the state as-is
-            // (no reply, no error, not busy) so the section
-            // header is visible but the body is empty.
-            // (Phase 4.2.1 will add an "ask?" prompt here.)
+            // Take up to 5 file/app results as context. We
+            // don't filter by kind — the LLM can decide
+            // whether a result is relevant from the user's
+            // question. 5 is a reasonable upper bound
+            // (16 KB per file * 5 = 80 KB of context, well
+            // under any LLM's limit).
+            lastSearchContextURLs = r.prefix(5).map { $0.url }
+        } else {
+            lastSearchContextURLs = []
+        }
+        if case .ask = intent {
+            // Keep llmReply/llmError as-is so the AI section
+            // header is visible but the body is empty until
+            // the user commits with Enter.
         } else {
             // Non-ask query: clear any prior LLM state.
             llmReply = nil; llmError = nil
+            lastSearchContextURLs = []
         }
-        Log.write("[AppState] runSearch done for q=\(q.prefix(60)), will NOT auto-ask")
+        Log.write("[AppState] runSearch done for q=\(q.prefix(60)), will NOT auto-ask, results=\(r.count)")
     }
+
+    /// The file URLs to pass as context to the next LLM
+    /// ask. Populated by runSearch when the user types an
+    /// ask-style query and the file search returns matches.
+    /// Consumed by runLLMAsk (when the user presses Enter)
+    /// to ground the LLM's reply in the file content.
+    private var lastSearchContextURLs: [URL] = []
 
     // MARK: - LLM ask (Phase 4.1.5 + 4.2.x)
 
@@ -323,8 +341,18 @@ final class AppState: ObservableObject {
         let intent = await interpreter.interpret(query)
         switch intent {
         case .ask(let q, let contextURLs):
-            Log.write("[AppState] activate: no selection + ask intent, dispatching LLM")
-            await runLLMAsk(query: q, contextURLs: contextURLs)
+            // Phase 4.2.5: use the candidate file URLs
+            // populated by runSearch (top-5 matches from
+            // the most recent typing session) as the LLM
+            // context. If the user hasn't typed anything
+            // that would produce file matches, this is
+            // empty and the LLM gets a general-knowledge
+            // prompt.
+            let urls = !lastSearchContextURLs.isEmpty
+                ? lastSearchContextURLs
+                : contextURLs
+            Log.write("[AppState] activate: ask intent, q=\(q.prefix(40)), contextURLs=\(urls.count)")
+            await runLLMAsk(query: q, contextURLs: urls)
             self.query = ""
             return
         case .openApp(let name):
