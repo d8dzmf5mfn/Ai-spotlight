@@ -40,17 +40,26 @@ final class AppState: ObservableObject {
 
     func onQueryChange(_ newQuery: String) {
         // Debounce: cancel the previous search task but wait
-        // ~600ms after the last keystroke before firing. The 600ms
-        // is a balance: too short and we hammer the LLM with
-        // intermediate queries; too long and the UI feels laggy.
-        // Note: the in-flight LLM streaming call is also cancelled
-        // by this — once the LLM starts streaming, the user's
-        // keystrokes that change the query cancel the stream and
-        // restart. That's intentional (matches Spotlight/Raycast
-        // behavior) but means the LLM provider should be cheap
-        // to cancel mid-stream (it is for Ollama).
+        // ~600ms after the last keystroke before firing.
+        //
+        // IMPORTANT: we do NOT cancel llmTask here. The
+        // previous Phase 4.2.x design cancelled the in-flight
+        // LLM task on every keystroke, but the user-pinned
+        // bug here is that NSTextField fires
+        // `controlTextDidChange` on the SAME tick as the Enter
+        // command (the panel-clear/empty-string path), which
+        // races with the LLM task just spawned by activate().
+        // The LLM task gets cancelled before URLSession can
+        // even throw its first -1004, so the catch block in
+        // AppState.runLLMAsk never runs and the user sees a
+        // blank panel. The LLM is its own commit-gated action;
+        // it should only be cancelled by an explicit
+        // "user pressed Enter on a new ask" path, not by
+        // every keystroke. We let it run to completion (or
+        // its own error) — and a subsequent runLLMAsk will
+        // bump llmGeneration, making the old task's
+        // generation check fail and discarding its results.
         searchTask?.cancel()
-        llmTask?.cancel()
         debounceTimer?.invalidate()
         debounceTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: false) { [weak self] _ in
             guard let self else { return }
@@ -178,13 +187,18 @@ final class AppState: ObservableObject {
                 }
                 Log.write("[AppState] runLLMAsk: stream done, llmReply length=\(self?.llmReply?.count ?? 0)")
             } catch {
-                // With the new askStreaming impl, the catch
-                // block is guaranteed to run when the provider
-                // throws — even synchronously, even before
-                // any chunk is yielded.
+                // Log IMMEDIATELY before any guard, so we can see
+                // whether the catch block runs at all.
+                Log.write("[AppState] runLLMAsk: catch entered, error=\(error), capturedGen=\(currentGeneration)")
                 let errMsg = Self.friendlyLLMError(error, provider: service)
+                Log.write("[AppState] runLLMAsk: friendly error=\(errMsg)")
                 await MainActor.run {
-                    guard let self, self.llmGeneration == currentGeneration else { return }
+                    let currentGen = self?.llmGeneration ?? -1
+                    Log.write("[AppState] runLLMAsk: catch in MainActor, captured=\(currentGeneration) current=\(currentGen)")
+                    guard let self, self.llmGeneration == currentGeneration else {
+                        Log.write("[AppState] runLLMAsk: MISMATCH — discarding old catch")
+                        return
+                    }
                     if Self.isURLCancelled(error) {
                         // Cancelled = user (or a new ask) interrupted
                         // us. Don't surface that as an error; just

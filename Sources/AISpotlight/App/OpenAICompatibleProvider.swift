@@ -35,7 +35,7 @@ public final class OpenAICompatibleProvider: AIProvider, @unchecked Sendable {
         return try parseIntentJSON(content, fallback: .unknown(raw: query))
     }
 
-    // MARK: - ask (Phase 4.1)
+    // MARK: - ask (Phase 4.1) — non-streaming
 
     public func ask(query: String, context: LLMContext) async throws -> String {
         // The prompt has already been enriched with context by
@@ -43,7 +43,7 @@ public final class OpenAICompatibleProvider: AIProvider, @unchecked Sendable {
         // message and return the assistant's reply as-is. No
         // json_mode: we want a free-form String back, not a JSON
         // object.
-        let body = try Self.encodeAskBody(model: config.model, query: query)
+        let body = try Self.encodeAskBody(model: config.model, query: query, stream: false)
         Log.write("[OpenAICompatibleProvider.ask] POSTing to \(config.baseURL) model=\(config.model) queryLen=\(query.count)")
         do {
             let reply = try await sendChat(body: body, jsonMode: false)
@@ -55,6 +55,134 @@ public final class OpenAICompatibleProvider: AIProvider, @unchecked Sendable {
         }
     }
 
+    // MARK: - askStreaming (Phase 4.2.x, external review)
+
+    /// Real SSE streaming. The previous default impl in
+    /// `AIProvider.swift` wrapped the non-streaming `ask` call in
+    /// a detached `Task` inside the `AsyncThrowingStream` init
+    /// closure. When the underlying `ask` threw synchronously
+    /// (URLSession's NSURLError -1004 for Ollama being offline
+    /// fires in milliseconds), `continuation.finish(throwing:)`
+    /// ran BEFORE the consumer's `for try await` was even
+    /// attached, and the error was silently dropped — the
+    /// stream just terminated "normally" with zero chunks.
+    ///
+    /// The fix: drop the wrapper, talk to `URLSession.bytes(for:)`
+    /// directly. `URLSession.bytes` is itself an `AsyncBytes`
+    /// that throws errors on the consumer's iteration context
+    /// (not on a detached task), so the catch block in
+    /// `AppState` is guaranteed to fire when Ollama is offline.
+    /// This is the industry-standard pattern for SSE
+    /// consumption on macOS 14+ / iOS 17+.
+    public func askStreaming(query: String, context: LLMContext) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            // Build the streaming request. We use `stream: true`
+            // in the body so the server (Ollama, OpenAI,
+            // Together, etc.) emits SSE-format chunks.
+            let body: Data
+            do {
+                body = try Self.encodeAskBody(model: config.model, query: query, stream: true)
+            } catch {
+                continuation.finish(throwing: error)
+                return
+            }
+            let url = config.baseURL.appendingPathComponent("chat/completions")
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if let key = config.apiKey, !key.isEmpty {
+                req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+            }
+            req.httpBody = body
+
+            Log.write("[OpenAICompatibleProvider.askStreaming] POSTing to \(url) stream=true model=\(config.model) queryLen=\(query.count)")
+            // The producer task captures the network
+            // request. The consumer (AppState's for try await
+            // loop) attaches to the continuation concurrently
+            // with this task spawning — but the difference is
+            // that errors here propagate through `for try await
+            // line in bytes.lines`, which is the consumer's
+            // iteration context. No detached continuation
+            // races.
+            let producerTask = Task {
+                do {
+                    // URLSession.bytes throws when the
+                    // connection fails. The error happens on
+                    // the consumer's await of the first byte,
+                    // not on a detached task — so the
+                    // catch block in AppState WILL see it.
+                    let (bytes, response) = try await session.bytes(for: req)
+                    guard let http = response as? HTTPURLResponse else {
+                        throw AIProviderError.badResponse(-1)
+                    }
+                    guard (200..<300).contains(http.statusCode) else {
+                        throw AIProviderError.decodeFailure("HTTP \(http.statusCode)")
+                    }
+
+                    // Parse SSE line-by-line. The OpenAI /
+                    // Ollama streaming format is:
+                    //   data: {"choices": [{"delta": {"content": "..."}}]}
+                    //   data: {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+                    //   data: [DONE]
+                    // Each line is a separate CRLF-terminated
+                    // event. `bytes.lines` splits on \n, \r\n,
+                    // or \r and strips the terminator.
+                    for try await line in bytes.lines {
+                        if Task.isCancelled { break }
+                        guard let chunk = Self.parseSSELine(line) else { continue }
+                        if chunk.isEmpty { continue }
+                        continuation.yield(chunk)
+                    }
+                    continuation.finish()
+                } catch {
+                    // Critical: this error now reaches the
+                    // AppState catch block, which sets
+                    // `llmError` and clears `isLLMBusy`.
+                    // The user sees the error in the panel
+                    // immediately, instead of a frozen
+                    // "Thinking…" state.
+                    Log.write("[OpenAICompatibleProvider.askStreaming] ERROR: \(error.localizedDescription)")
+                    continuation.finish(throwing: error)
+                }
+            }
+            // Consumer cancel → propagate to producer
+            // (URLSession.bytes will be torn down).
+            continuation.onTermination = { @Sendable _ in
+                producerTask.cancel()
+            }
+        }
+    }
+
+    /// Parse a single SSE line. Returns the content delta or
+    /// nil for non-data lines / keep-alives / the [DONE]
+    /// sentinel / empty payloads.
+    private static func parseSSELine(_ line: String) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("data: ") else { return nil }
+        let json = String(trimmed.dropFirst("data: ".count))
+        if json == "[DONE]" { return "" }  // terminator; no content
+        // Parse the OpenAI / Ollama streaming chunk shape:
+        // { "choices": [{ "delta": { "content": "..." } }] }
+        // We use a tiny JSON parser instead of a full Codable
+        // struct because there are half a dozen optional
+        // fields (finish_reason, index, logprobs, ...) that
+        // we don't care about.
+        guard let data = json.data(using: .utf8) else { return nil }
+        struct WireChunk: Decodable {
+            struct Choice: Decodable {
+                struct Delta: Decodable {
+                    let content: String?
+                }
+                let delta: Delta?
+            }
+            let choices: [Choice]?
+        }
+        guard let wire = try? JSONDecoder().decode(WireChunk.self, from: data),
+              let content = wire.choices?.first?.delta?.content
+        else { return nil }
+        return content
+    }
+
     // MARK: - Wire format
 
     private struct Message: Codable { let role: String; let content: String }
@@ -62,15 +190,20 @@ public final class OpenAICompatibleProvider: AIProvider, @unchecked Sendable {
         let model: String
         let messages: [Message]
         let response_format: [String: String]?
+        /// `stream: true` switches the server into SSE mode.
+        /// `false` (or absent) returns the full reply in one
+        /// JSON object (used by classify and ask).
+        let stream: Bool?
 
         enum CodingKeys: String, CodingKey {
             case model, messages
             case response_format = "response_format"
+            case stream
         }
     }
 
     /// Classify body: uses json_object response format + the
-    /// JSON-output system prompt.
+    /// JSON-output system prompt. Non-streaming.
     private static func encodeClassifyBody(model: String, query: String) throws -> Data {
         return try bodyEncoder.encode(Body(
             model: model,
@@ -78,20 +211,22 @@ public final class OpenAICompatibleProvider: AIProvider, @unchecked Sendable {
                 Message(role: "system", content: Self.systemPrompt),
                 Message(role: "user", content: query),
             ],
-            response_format: ["type": "json_object"]
+            response_format: ["type": "json_object"],
+            stream: false
         ))
     }
 
-    /// Ask body: free-form reply, no json_mode. No system prompt;
-    /// `LLMConversationService` already built a context-rich user
-    /// message for us.
-    private static func encodeAskBody(model: String, query: String) throws -> Data {
+    /// Ask body: free-form reply, no json_mode. `stream` is
+    /// set by the caller (ask uses false, askStreaming uses
+    /// true).
+    private static func encodeAskBody(model: String, query: String, stream: Bool) throws -> Data {
         return try bodyEncoder.encode(Body(
             model: model,
             messages: [
                 Message(role: "user", content: query),
             ],
-            response_format: nil
+            response_format: nil,
+            stream: stream
         ))
     }
 
@@ -101,11 +236,12 @@ public final class OpenAICompatibleProvider: AIProvider, @unchecked Sendable {
     Output ONLY the JSON. No prose.
     """
 
-    // MARK: - HTTP
+    // MARK: - HTTP (non-streaming path)
 
     /// POST the body to chat/completions and return the assistant's
     /// reply text. `jsonMode = true` is used by classify; `false` is
-    /// used by ask.
+    /// used by ask. (askStreaming uses `URLSession.bytes` directly
+    /// and bypasses this helper.)
     private func sendChat(body: Data, jsonMode: Bool) async throws -> String {
         let url = config.baseURL.appendingPathComponent("chat/completions")
         var req = URLRequest(url: url)
