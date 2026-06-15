@@ -510,8 +510,22 @@ final class AppState: ObservableObject {
                 closePanel()
                 return
             }
+            // Open the file/app via NSWorkspace, but only close
+            // the panel if the LLM isn't currently streaming a
+            // reply. When the LLM is busy, the user wants to see
+            // the streaming reply, not have the panel slam shut
+            // mid-token. They can dismiss the panel manually
+            // with Esc once the LLM finishes.
+            //
+            // Without this guard, opening a file from the result
+            // list while an LLM ask is in flight would steal the
+            // LLM reply from the user — they'd see the file
+            // open (good) but the LLM reply would stream into a
+            // panel that's no longer visible.
             NSWorkspace.shared.open(r.url)
-            closePanel()
+            if !isLLMBusy {
+                closePanel()
+            }
             return
         }
 
