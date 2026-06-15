@@ -132,10 +132,30 @@ private struct LLMReplyView: View {
     var body: some View {
         ScrollView(.vertical, showsIndicators: true) {
             VStack(alignment: .leading, spacing: 6) {
-                if let err = state.llmError {
-                    Label("LLM error: \(err)", systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.red)
-                        .font(.callout)
+                if let err = state.llmError, !err.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(err, systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.red)
+                            .font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                        // Phase 4.2.6: show a "Start Ollama"
+                        // button for the not-running variants.
+                        // The user can relaunch the Ollama.app
+                        // with a single click — we don't
+                        // auto-restart it (P2 architecture: Ollama
+                        // is an external dependency, not under our
+                        // control).
+                        if let kind = state.llmErrorKind, Self.shouldShowStartOllamaButton(kind) {
+                            Button {
+                                Self.startOllama()
+                            } label: {
+                                Label("Start Ollama", systemImage: "play.circle")
+                                    .font(.callout)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                        }
+                    }
                 } else if let reply = state.llmReply, !reply.isEmpty {
                     // Streaming: llmReply grows chunk-by-chunk as the
                     // LLM produces tokens. ScrollViewReader lets us
@@ -153,6 +173,43 @@ private struct LLMReplyView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// True when the error kind is one that can be resolved
+    /// by relaunching Ollama.app. Other kinds (timeout, bad
+    /// response, etc.) need different fixes.
+    private static func shouldShowStartOllamaButton(_ kind: LLMErrorKind) -> Bool {
+        switch kind {
+        case .ollamaNotRunning, .idleExit, .userQuit:
+            return true
+        case .ollamaCrashed, .timeout, .badResponse, .other:
+            return false
+        }
+    }
+
+    /// Launch Ollama.app via the system `open` command. We
+    /// use Process rather than NSWorkspace.shared.open so we
+    /// don't accidentally bring it to the foreground (the
+    /// user might be in the middle of typing in our panel —
+    /// we want the relaunch to be silent, in the background).
+    private static func startOllama() {
+        let task = Process()
+        task.launchPath = "/usr/bin/open"
+        task.arguments = ["-g", "-a", "Ollama"]
+        // -g = don't bring to foreground (background launch)
+        do {
+            try task.run()
+        } catch {
+            // If the launch fails (e.g. Ollama.app not
+            // installed), fall back to opening the Ollama
+            // homepage in the user's browser so they can
+            // download it. The URL is hardcoded because
+            // there's no API for "open ollama's website" on
+            // macOS.
+            if let url = URL(string: "https://ollama.com/download") {
+                NSWorkspace.shared.open(url)
+            }
         }
     }
 }

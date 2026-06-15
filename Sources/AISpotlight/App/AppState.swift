@@ -3,6 +3,42 @@ import AppKit
 import Combine
 import AISpotlightKit
 
+/// What kind of LLM error is this? Drives the UI
+/// buttons shown next to the error message.
+public enum LLMErrorKind: Equatable, Sendable {
+    /// Ollama was never started (or was started but is no
+    /// longer reachable). Distinguished from idleExit /
+    /// userQuit because the user may not have known they
+    /// needed to start it. UI shows a "Start Ollama"
+    /// button. Phase 4.2.6 default for -1004 when we have
+    /// no recent user-quit signal.
+    case ollamaNotRunning
+    /// Ollama idle-unloaded itself (OLLAMA_KEEP_ALIVE=5m
+    /// default). This is the most common case after the
+    /// user has been away from the panel for a while.
+    /// Same UI as ollamaNotRunning ("Start Ollama" button)
+    /// but a different message that hints at the cause
+    /// ("idle") so the user knows what's happening.
+    case idleExit
+    /// User explicitly quit Ollama (Cmd+Q, dock Quit,
+    /// Activity Monitor Quit). Same UI as the other
+    /// "not running" cases, message is "you quit it, click
+    /// to relaunch".
+    case userQuit
+    /// Ollama crashed mid-response (-1005 'Network
+    /// connection lost'). Often jetsam-killed on memory-
+    /// constrained Macs running 12B+ models.
+    case ollamaCrashed
+    /// LLM timed out (-1001). Could be: model too large,
+    /// prompt too long, GPU warmup, etc.
+    case timeout
+    /// Bad HTTP response (4xx/5xx). Could be: bad API key,
+    /// bad model name, server error.
+    case badResponse(String)
+    /// Catch-all. UI just shows the message.
+    case other(String)
+}
+
 @MainActor
 final class AppState: ObservableObject {
     @Published var query: String = ""
@@ -19,6 +55,28 @@ final class AppState: ObservableObject {
     @Published var llmReply: String? = nil
     @Published var isLLMBusy: Bool = false
     @Published var llmError: String? = nil
+
+    /// Phase 4.2.6: classified LLM error for UI rendering. When
+    /// the error is `ollamaNotRunning`, the SwiftUI view shows
+    /// a "Start Ollama" button next to the error text. Other
+    /// cases (timeout, bad response, network lost) just show
+    /// the friendly message — the user has to fix them in
+    /// Settings or in their environment. We deliberately do NOT
+    /// auto-restart Ollama (P2 architecture decision: Ollama is
+    /// an external dependency service, not under our control).
+    @Published var llmErrorKind: LLMErrorKind? = nil
+
+    /// Phase 4.2.6 (P2): track the last time the Ollama.app
+    /// process was terminated. We use this to disambiguate
+    /// "user Cmd+Q quit" from "Ollama idle-unloaded itself"
+    /// — both look identical from URLSession's perspective
+    /// (Code=-1004 'Could not connect'). Listening to
+    /// `NSWorkspace.didTerminateApplicationNotification`
+    /// gives us the user-quit case; anything else within a
+    /// short window of an -1004 is most likely Ollama's
+    /// own `OLLAMA_KEEP_ALIVE` idle exit.
+    private var lastOllamaQuit: Date? = nil
+    private var lastOllamaQuitWasUserInitiated: Bool = false
 
     /// Phase 4.2.6: prior conversation turns, used to ground
     /// follow-up questions in the LLM. We keep this as a
@@ -45,6 +103,49 @@ final class AppState: ObservableObject {
         self.interpreter = interpreter
         self.orchestrator = orchestrator
         self.llmService = llmService
+        // Phase 4.2.6 (P2): listen for Ollama.app termination.
+        // We use NSWorkspace's notification center to detect when
+        // the user explicitly Cmd+Q's Ollama (or quits it via
+        // the dock). The idle-unload case (OLLAMA_KEEP_ALIVE=5m)
+        // does NOT fire this notification — it just makes the
+        // process exit. So we use this to disambiguate.
+        //
+        // We intentionally do NOT use this for auto-restart.
+        // Even if the user Cmd+Q'd Ollama, the right thing is to
+        // show a "Start Ollama" button, not to silently relaunch
+        // a process the user just quit. See the architecture
+        // decision in `.hermes/4.2.5-open-bugs.md` Bug #5.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleOllamaAppTerminated(_:)),
+            name: NSWorkspace.didTerminateApplicationNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        // The notification observer is auto-removed when self
+        // is deallocated (we passed self as the observer), so
+        // we don't need to call removeObserver manually.
+    }
+
+    /// NSWorkspace.didTerminateApplicationNotification handler.
+    /// Marked @objc because the selector must be ObjC-compatible.
+    /// Only fires for user-initiated quits (Cmd+Q, dock "Quit",
+    /// Activity Monitor "Quit Process") — does NOT fire for the
+    /// OLLAMA_KEEP_ALIVE idle unload, which is a clean exit
+    /// from the process's perspective.
+    @objc private func handleOllamaAppTerminated(_ notification: Notification) {
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+              app.bundleIdentifier == "com.ollama.Ollama" else {
+            return
+        }
+        // The user explicitly quit Ollama. Record the time so
+        // the next -1004 in runLLMAsk can be classified as
+        // .userQuit instead of .idleExit.
+        Self.lastOllamaQuitTimestamp = Date()
+        Self.lastOllamaQuitWasUserInitiated = true
+        Log.write("[AppState] Ollama.app terminated by user (bundleID=\(app.bundleIdentifier ?? "?"))")
     }
 
     func onQueryChange(_ newQuery: String) {
@@ -211,6 +312,8 @@ final class AppState: ObservableObject {
                 if Task.isCancelled { return }
                 await MainActor.run {
                     guard let self, self.llmGeneration == currentGeneration else { return }
+                    self.llmError = nil
+                    self.llmErrorKind = nil
                     self.isLLMBusy = false
                     // Phase 4.2.6: append the user turn and
                     // the assistant reply to the history so
@@ -230,7 +333,9 @@ final class AppState: ObservableObject {
                 // block is guaranteed to run when the provider
                 // throws — even synchronously, even before
                 // any chunk is yielded.
-                let errMsg = Self.friendlyLLMError(error, provider: service)
+                let classified = Self.classifyLLMError(error)
+                let errMsg = classified.message
+                let errKind = classified.kind
                 await MainActor.run {
                     guard let self, self.llmGeneration == currentGeneration else { return }
                     if Self.isURLCancelled(error) {
@@ -240,6 +345,7 @@ final class AppState: ObservableObject {
                         self.isLLMBusy = false
                     } else {
                         self.llmError = errMsg
+                        self.llmErrorKind = errKind
                         self.isLLMBusy = false
                     }
                 }
@@ -256,17 +362,52 @@ final class AppState: ObservableObject {
     /// `runLLMAsk`'s Task closure.
     private var llmGeneration: Int = 0
 
-    /// Translate raw URLSession / HTTP errors into a message
-    /// the user can act on. NSURLError Code=-1004 ("Could not
-    /// connect to the server") on localhost:11434 almost
-    /// certainly means Ollama isn't running — that's the
-    /// 90% case and we should call it out.
-    private static func friendlyLLMError(_ error: Error, provider: LLMConversationService) -> String {
+    /// Translate raw URLSession / HTTP errors into both a
+    /// user-facing message AND a classification (`LLMErrorKind`)
+    /// that the SwiftUI view uses to render the right action
+    /// (e.g. a "Start Ollama" button for `ollamaNotRunning`).
+    ///
+    /// NSURLError Code=-1004 ("Could not connect to the server")
+    /// on localhost:11434 almost certainly means Ollama isn't
+    /// running — that's the 90% case and we should call it out.
+    /// Distinguishing "user Cmd+Q quit" from "Ollama idle
+    /// unloaded itself" requires P2's NSWorkspace notification
+    /// listener; until that lands, both surface as
+    /// `.ollamaNotRunning` with the same message. Once P2
+    /// ships, we'll refine the message based on the recorded
+    /// reason.
+    static func classifyLLMError(_ error: Error) -> (kind: LLMErrorKind, message: String) {
         let nsError = error as NSError
         if nsError.domain == NSURLErrorDomain {
             switch nsError.code {
             case -1004: // Could not connect
-                return "Ollama is not running. Start it with: ollama serve"
+                // This is the trickiest case to classify
+                // because three different reasons produce the
+                // same NSURLError -1004:
+                //   1. User Cmd+Q'd Ollama.app
+                //   2. Ollama idle-unloaded itself
+                //      (OLLAMA_KEEP_ALIVE=5m default)
+                //   3. Ollama was never started
+                //
+                // The AppState singleton tracks the last
+                // user-initiated quit (P2 NSWorkspace
+                // listener). If the last quit was within the
+                // last 10 seconds, attribute this to a
+                // user-initiated quit. Otherwise, assume
+                // idle-unload (the much more common case after
+                // the user has been away from the panel for a
+                // while).
+                //
+                // Note: the AppState cannot be a parameter to
+                // a static method without a singleton; we
+                // use a type-level static for the timestamp
+                // so the same classification logic applies
+                // everywhere. This is the P2 architecture.
+                if let quitTime = lastOllamaQuitTimestamp,
+                   Date().timeIntervalSince(quitTime) < 10 {
+                    return (.userQuit, "Ollama was quit. Click Start Ollama to relaunch it.")
+                }
+                return (.idleExit, "Ollama stopped after being idle. Click Start Ollama to relaunch it, or increase OLLAMA_KEEP_ALIVE in Ollama settings.")
             case -1005: // Network connection lost
                 // Distinct from -1004: this means the connection
                 // WAS up and then died — usually Ollama crashed
@@ -275,28 +416,40 @@ final class AppState: ObservableObject {
                 // message distinguishes the two cases so they
                 // know to check `ollama ps` and possibly pick
                 // a smaller model.
-                return "Ollama crashed mid-response (often due to running a model too large for your Mac's RAM). Try a smaller model in Settings, or restart Ollama."
+                return (.ollamaCrashed, "Ollama crashed mid-response (often due to running a model too large for your Mac's RAM). Try a smaller model in Settings, or restart Ollama.")
             case -1001: // Timed out
-                return "LLM timed out. The model may be too large for your Mac, or the prompt was too long."
+                return (.timeout, "LLM timed out. The model may be too large for your Mac, or the prompt was too long.")
             case -1003: // Host not found
-                return "LLM host not found. Check Settings → AI Provider."
+                return (.other("LLM host not found. Check Settings → AI Provider."), "LLM host not found. Check Settings → AI Provider.")
             case -999:  // Cancelled (user or new ask interrupted us)
-                // Should never reach the user (we filter it out
-                // in the catch block), but if it does, return an
-                // empty string so the panel stays clean.
-                return ""
+                return (.other(""), "")
             default:
-                return "LLM connection error (\(nsError.code)): \(error.localizedDescription)"
+                return (.other("LLM connection error (\(nsError.code)): \(error.localizedDescription)"), "LLM connection error (\(nsError.code)): \(error.localizedDescription)")
             }
         }
         if let aiError = error as? AIProviderError {
-            return aiError.errorDescription ?? "AI provider error"
+            let msg = aiError.errorDescription ?? "AI provider error"
+            return (.badResponse(msg), msg)
         }
-        return error.localizedDescription
+        return (.other(error.localizedDescription), error.localizedDescription)
     }
 
+    /// Type-level timestamp of the last user-initiated Ollama
+    /// quit (Cmd+Q, dock "Quit", Activity Monitor "Quit").
+    /// Set by `handleOllamaAppTerminated` in the AppState
+    /// init. We use a type-level static rather than an
+    /// instance property so the static `classifyLLMError`
+    /// method can read it without threading an AppState
+    /// reference through every call site.
+    ///
+    /// This is global mutable state — the same anti-pattern
+    /// we'd warn against in a multi-instance app. But AI
+    /// Spotlight has exactly one AppState (singleton pattern
+    /// via main.swift), so it's fine in practice.
+    private static var lastOllamaQuitTimestamp: Date? = nil
+    private static var lastOllamaQuitWasUserInitiated: Bool = false
+
     /// True for the URLSession "this request was cancelled"
-    /// error. URLSession surfaces cancellations as
     /// NSURLError Code=-999, NOT as a Task cancellation
     /// directly. The `Task.isCancelled` flag is set earlier
     /// (we get a heads-up via that), but the actual error
