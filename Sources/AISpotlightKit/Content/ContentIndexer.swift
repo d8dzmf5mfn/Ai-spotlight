@@ -51,6 +51,8 @@ public actor ContentIndexer {
     /// 4. Persist to disk at the end.
     public func index(roots: [URL]) async -> IndexProgress {
         await ensureLocalCachesLoaded()
+        let startTime = Date()
+        Log.write("[ContentIndexer] walk starting: roots=\(roots.count)")
         var scanned = 0
         var indexed = 0
         var skipped = 0
@@ -59,6 +61,7 @@ public actor ContentIndexer {
         // Pass 1: walk the filesystem, decide action per file.
         let decisions = decisionsForRoots(roots)
         scanned = decisions.count
+        Log.write("[ContentIndexer] walk done: \(scanned) decisions in \(String(format: "%.2f", Date().timeIntervalSince(startTime)))s")
 
         // Track which URLs we saw on disk this pass — anything in
         // `existingDocumentMtimes` (pre-load from disk) but not in
@@ -85,16 +88,17 @@ public actor ContentIndexer {
             return false
         }.count
 
-        for d in toUpsert {
-            do {
-                try await ingest(d.url)
-                indexed += 1
-            } catch {
-                // Read failed (file locked, encoding error, etc.) —
-                // skip silently. We could log via `Log.write` but the
-                // indexer is in the Kit and we don't want a hard dep.
-                skipped += 1
-            }
+        // Batched parallel ingest. The previous version did
+        // `try await ingest(d.url)` in a sequential for-loop — for
+        // 80k files that's 80k sequential actor hops, which took
+        // minutes and pinned CPU at 100% (see Phase 3.1.5
+        // verification log: 5 GB RSS after 3 min, never
+        // completed). With TaskGroup + a small batch size of 50,
+        // we parallelize the file reads while keeping memory bounded
+        // (50 × 5MB max file size = 250MB per batch, not 2.5GB).
+        await ingestInBatches(toUpsert.map { $0.url },
+                                batchSize: 50) { ok in
+            if ok { indexed += 1 } else { skipped += 1 }
         }
 
         // Remove files that were marked for removal by the walker
@@ -145,6 +149,11 @@ public actor ContentIndexer {
     }
 
     private func decisionsForRoots(_ roots: [URL]) -> [Decision] {
+        // Reset the symlink-loop guard at the start of each walk.
+        // (Without this, the second indexer call would refuse to
+        // descend into any directory it had visited in the first
+        // call.)
+        visitedDirectories.removeAll()
         var decisions: [Decision] = []
         for root in roots {
             walk(root, into: &decisions)
@@ -154,6 +163,9 @@ public actor ContentIndexer {
 
     /// Recursive walk. Skips blocked directories **before** descending
     /// into them (so the entire subtree is excluded in one shot).
+    /// Uses a `visited` set of standardized file URLs to prevent
+    /// infinite recursion in the face of symlink loops (e.g. a
+    /// directory that's a symlink to its parent).
     private func walk(_ dir: URL, into decisions: inout [Decision]) {
         // Reject blocked dirs at the top level too — e.g. the user
         // might point at `~/code` which contains a `node_modules` we
@@ -169,6 +181,15 @@ public actor ContentIndexer {
         if Self.blockedDirNames.contains(basename) {
             return
         }
+
+        // Resolve symlinks for the cycle-detection key. Two paths
+        // that resolve to the same standardized URL are the same
+        // directory on disk — visiting one is enough.
+        let canonical = dir.standardizedFileURL
+        if visitedDirectories.contains(canonical) {
+            return  // symlink loop — don't descend
+        }
+        visitedDirectories.insert(canonical)
 
         let contents: [URL]
         do {
@@ -213,6 +234,13 @@ public actor ContentIndexer {
             ))
         }
     }
+
+    /// Set of standardized directory URLs we've already visited in
+    /// this walk. Prevents infinite recursion when the filesystem
+    /// contains symlink loops (a directory that links to one of its
+    /// ancestors). See the Phase 3.1.5 verification log for a real
+    /// 5 GB / 2.5 min hang case this caused.
+    private var visitedDirectories: Set<URL> = []
 
     private func classifyAction(url: URL, mtime: Date, byteSize: Int) -> Action {
         // We need to look up the existing document. The cleanest way
@@ -278,6 +306,47 @@ public actor ContentIndexer {
 
     // MARK: - Ingest
 
+    /// Process a list of URLs in parallel batches. Each batch is a
+    /// `TaskGroup` of at most `batchSize` concurrent ingest calls.
+    /// Returns a stream of `ok` (file indexed) / not-ok (read failed)
+    /// to the per-file completion closure.
+    ///
+    /// Why not use `ingest(url)` per-URL directly? See the comment
+    /// at the call site in `index(...)` for the 80k-files / 5 GB
+    /// memory hang this used to cause.
+    private func ingestInBatches(
+        _ urls: [URL],
+        batchSize: Int = 500,
+        perFile: (Bool) -> Void
+    ) async {
+        var i = 0
+        while i < urls.count {
+            let end = Swift.min(i + batchSize, urls.count)
+            let batch = urls[i..<end]
+            // Run this batch in parallel; wait for all to finish.
+            await withTaskGroup(of: Bool.self) { group in
+                for url in batch {
+                    group.addTask { [self] in
+                        do {
+                            try await self.ingest(url)
+                            return true
+                        } catch {
+                            return false
+                        }
+                    }
+                }
+                for await ok in group {
+                    perFile(ok)
+                }
+            }
+            i = end
+        }
+    }
+
+    // MARK: - Ingest (single file)
+
+    /// Read a single file, dispatch by extension, tokenize, upsert
+    /// into the store. The workhorse called by `ingestInBatches`.
     private func ingest(_ url: URL) async throws {
         // Get mtime + size up front; the actual text extraction
         // method depends on the file's extension.

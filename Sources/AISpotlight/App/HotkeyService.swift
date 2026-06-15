@@ -1,5 +1,7 @@
 import AppKit
+import Foundation
 import KeyboardShortcuts
+import AISpotlightKit
 
 /// Thin wrapper around sindresorhus/KeyboardShortcuts that registers a single
 /// global hotkey which toggles a callback. Centralizes the KeyboardShortcuts.Name

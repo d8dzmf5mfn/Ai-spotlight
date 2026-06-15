@@ -21,37 +21,6 @@ _ = AppLauncher.shared
 /// of the app's actual working directory, sandbox state, or bundle
 /// identity. The /tmp path is the LAST-RESORT diagnostic surface — when
 /// everything else (print, NSLog, stderr) has failed, this still works.
-///
-/// IMPORTANT: any tool that wants to debug launch-time issues in a
-/// SwiftPM .app should write its first message via `Log.bootstrap` (the
-/// top of main.swift does this) — do NOT wait for class initialization,
-/// because Swift 6 strict-concurrency + lazy static initialization has
-/// subtle ordering bugs that can silently drop messages.
-enum Log {
-    /// Path is hardcoded to /tmp so the file is reachable whether the app
-    /// is launched from Finder, Terminal, or via NSWorkspace.
-    static let url: URL = URL(fileURLWithPath: "/tmp/aispotlight-app.log")
-
-    /// Call this from the very first line of main.swift, before any
-    /// framework setup. Uses the simplest possible mechanism (Data.write)
-    /// and avoids the Log enum entirely, so even if the Log type fails to
-    /// initialize for any reason, the message still lands on disk.
-    static func bootstrap(_ msg: String) {
-        let line = "\(Date()) [bootstrap] \(msg)\n"
-        try? Data(line.utf8).write(to: url)
-    }
-
-    /// Writes a line to the log. Safe to call from any thread.
-    static func write(_ msg: String) {
-        let line = "\(Date()) \(msg)\n"
-        if let h = try? FileHandle(forWritingAtPath: url.path) {
-            h.seekToEndOfFile()
-            h.write(Data(line.utf8))
-            try? h.close()
-        }
-    }
-}
-
 final class AppLauncher: NSObject, NSApplicationDelegate {
     static let shared = AppLauncher()
     var panel: SpotlightPanel!
@@ -90,11 +59,62 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
         let aiConfig = settings.resolveConfig()
         let ai = AIFactory.makeProvider(from: aiConfig)
         let interpreter = QueryInterpreter(aiProvider: ai)
+
+        // Phase 3.1: create the on-disk content index. The
+        // IndexStore's init copies IndexStore.pendingDispatchers
+        // (set by injectAppKitDispatchers above) into its own map,
+        // so RTF/HTML files will be routed through RichTextExtractor
+        // when the indexer walks the filesystem.
+        let indexStore: IndexStore
+        do {
+            let appSupport = try FileManager.default.url(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask,
+                appropriateFor: nil,
+                create: true
+            )
+            let appDir = appSupport.appendingPathComponent("AISpotlight", isDirectory: true)
+            let indexURL = appDir.appendingPathComponent("index.json")
+            indexStore = try IndexStore(diskPath: indexURL)
+            Log.write("IndexStore opened at \(indexURL.path)")
+        } catch {
+            // If we can't create the on-disk index, fall back to a
+            // in-tmpdir index. Content search won't survive restarts
+            // but the rest of the app keeps working.
+            let tmp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("AISpotlight-index-\(UUID().uuidString).json")
+            // If we can't even open a fresh store in /tmp, give up.
+            // The app will still work (no content search) but the
+            // status bar logs the failure.
+            guard let store = try? IndexStore(diskPath: tmp) else {
+                Log.write("IndexStore fallback to /tmp FAILED: \(tmp.path)")
+                return
+            }
+            indexStore = store
+            Log.write("IndexStore fallback to tmp: \(tmp.path)")
+        }
+
+        // Build the orchestrator with all three providers.
+        // ContentSearchProvider is the Phase 3.1 add — it queries
+        // the IndexStore for content-based hits.
+        let contentProvider = ContentSearchProvider(indexStore: indexStore)
         let orchestrator = SearchOrchestrator(providers: [
             FileSystemProvider(),
             AppProvider(),
+            contentProvider,
         ])
         state = AppState(interpreter: interpreter, orchestrator: orchestrator)
+
+        // Start indexing in the background after a short delay
+        // (let the UI settle first). The progress is published
+        // to the Settings UI; the rest of the app doesn't care.
+        let indexManager = IndexManager(store: indexStore)
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)  // 0.5s
+            Log.write("starting initial index walk")
+            let progress = await indexManager.startInitialIndex()
+            Log.write("initial index walk done: scanned=\(progress.filesScanned) indexed=\(progress.filesIndexed) skipped=\(progress.filesSkipped)")
+        }
 
         let host = NSHostingController(rootView: SearchWindowView(state: state))
         panel = SpotlightPanel()
