@@ -58,7 +58,17 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
         // to UserDefaults; we read the resolved config back from settings.
         let aiConfig = settings.resolveConfig()
         let ai = AIFactory.makeProvider(from: aiConfig)
-        let interpreter = QueryInterpreter(aiProvider: ai)
+
+        // Phase 4.2: build the LLM-based intent router. We pass
+        // the same provider as the conversation service — a small
+        // local model (Ollama gemma2:2b) handles routing in 1-2
+        // seconds, which is acceptable for the search-bar
+        // debounce. If the user picked "none" or the LLM call
+        // fails, QueryInterpreter falls back to the rule parser
+        // automatically.
+        let llmRouter: LLMIntentRouter? = ai.map { LLMIntentRouter(provider: $0) }
+
+        let interpreter = QueryInterpreter(aiProvider: ai, llmRouter: llmRouter)
 
         // Phase 4.1.5: build the LLM conversation service. We use
         // the same `ai` instance — if the user picked Ollama, the
