@@ -158,12 +158,28 @@ final class AppState: ObservableObject {
                 }
                 Log.write("[AppState] runLLMAsk: stream done, llmReply length=\(self?.llmReply?.count ?? 0)")
             } catch {
-                if Task.isCancelled { return }
+                // Important: even if Task.isCancelled, we MUST
+                // reset isLLMBusy here. Otherwise the panel stays
+                // stuck on "Thinking…" forever, because the
+                // cancellation throws NSURLError Code=-999
+                // ("cancelled") which doesn't carry enough info
+                // for the earlier `if Task.isCancelled { return }`
+                // check to be 100% reliable across all paths
+                // (URLSession's request lifecycle, in
+                // particular, fires the cancellation error AFTER
+                // the Task has been told to cancel).
                 let errMsg = Self.friendlyLLMError(error, provider: service)
                 await MainActor.run {
                     guard let self, self.llmGeneration == generation else { return }
-                    self.llmError = errMsg
-                    self.isLLMBusy = false
+                    // Cancelled = user (or a new ask) interrupted
+                    // us. Don't surface that as an error; just
+                    // clean up the busy state.
+                    if Self.isURLCancelled(error) {
+                        self.isLLMBusy = false
+                    } else {
+                        self.llmError = errMsg
+                        self.isLLMBusy = false
+                    }
                 }
                 Log.write("[AppState] runLLMAsk ERROR: \(errMsg)")
             }
@@ -193,6 +209,11 @@ final class AppState: ObservableObject {
                 return "LLM timed out. The model may be too large for your Mac, or the prompt was too long."
             case -1003: // Host not found
                 return "LLM host not found. Check Settings → AI Provider."
+            case -999:  // Cancelled (user or new ask interrupted us)
+                // Should never reach the user (we filter it out
+                // in the catch block), but if it does, return an
+                // empty string so the panel stays clean.
+                return ""
             default:
                 return "LLM connection error (\(nsError.code)): \(error.localizedDescription)"
             }
@@ -201,6 +222,25 @@ final class AppState: ObservableObject {
             return aiError.errorDescription ?? "AI provider error"
         }
         return error.localizedDescription
+    }
+
+    /// True for the URLSession "this request was cancelled"
+    /// error. URLSession surfaces cancellations as
+    /// NSURLError Code=-999, NOT as a Task cancellation
+    /// directly. The `Task.isCancelled` flag is set earlier
+    /// (we get a heads-up via that), but the actual error
+    /// thrown into our catch block is the URL error.
+    private static func isURLCancelled(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain && nsError.code == -999 {
+            return true
+        }
+        // CocoaError(.userCancelled) is the other path URLSession
+        // can take.
+        if let cocoa = error as? CocoaError, cocoa.code == .userCancelledError {
+            return true
+        }
+        return false
     }
 
     func moveSelection(_ delta: Int) {
