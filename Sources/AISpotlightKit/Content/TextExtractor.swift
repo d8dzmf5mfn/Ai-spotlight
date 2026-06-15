@@ -33,6 +33,14 @@ public enum TextExtractor {
         "txt", "md", "markdown", "rst", "org", "log",
         // PDFs (extracted via PDFKit — see PDFTextExtractor.swift)
         "pdf",
+        // Rich text (extracted via NSAttributedString — see
+        // RichTextExtractor.swift)
+        "rtf", "rtfd", "html", "htm",
+        // NOTE: .docx is NOT supported by NSAttributedString's
+        // .docFormat constant (it loads legacy .doc, not OOXML).
+        // We omit it from the allow-list so the indexer skips these
+        // files rather than silently failing.
+
         // Code (the long tail — anything we have an LSP server for, we
         // should index)
         "swift", "m", "mm", "h", "c", "cc", "cpp", "cxx", "hpp",

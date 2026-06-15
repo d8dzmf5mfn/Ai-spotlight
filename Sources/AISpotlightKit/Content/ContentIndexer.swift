@@ -286,13 +286,16 @@ public actor ContentIndexer {
         let size = (attrs[.size] as? Int) ?? 0
 
         // Dispatch on extension. Plain text files use the fast path
-        // (read → UTF-8 decode). PDFs go through PDFKit. Future
-        // extensions (RTF, DOCX) plug in here too.
+        // (read → UTF-8 decode). PDFs go through PDFKit. RTF/HTML
+        // go through NSAttributedString. Future extensions plug in
+        // here too.
         let ext = url.pathExtension.lowercased()
         let text: String
         switch ext {
         case "pdf":
             text = (try? PDFTextExtractor.extract(url)) ?? ""
+        case "rtf", "rtfd", "html", "htm":
+            text = (try? RichTextExtractor.extract(url)) ?? ""
         default:
             // Plain text: read into memory, decode as UTF-8, skip if
             // the file is binary (the "file has .md extension but is
