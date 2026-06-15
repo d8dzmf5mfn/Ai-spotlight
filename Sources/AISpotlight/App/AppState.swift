@@ -12,14 +12,30 @@ final class AppState: ObservableObject {
     @Published var placeholder: String = "Search files, apps, or ask AI…"
     @Published var emptyMessage: String = "Type to search."
 
+    /// Phase 4.1.5: the LLM's streaming (or one-shot) reply to
+    /// the user's question. Non-nil when an LLM ask is in flight or
+    /// just completed. The SwiftUI view shows this as a separate
+    /// panel under the result list.
+    @Published var llmReply: String? = nil
+    @Published var isLLMBusy: Bool = false
+    @Published var llmError: String? = nil
+
     private let interpreter: QueryInterpreter
     private let orchestrator: SearchOrchestrator
+    /// Optional LLM conversation service. Nil when the user picked
+    /// "none" in Settings. The search pipeline still works without
+    /// it; LLM-driven paths (Intent.ask) just gracefully fall back.
+    private let llmService: LLMConversationService?
     private var searchTask: Task<Void, Never>?
+    private var llmTask: Task<Void, Never>?
     private var debounceTimer: Timer?
 
-    init(interpreter: QueryInterpreter, orchestrator: SearchOrchestrator) {
+    init(interpreter: QueryInterpreter,
+         orchestrator: SearchOrchestrator,
+         llmService: LLMConversationService? = nil) {
         self.interpreter = interpreter
         self.orchestrator = orchestrator
+        self.llmService = llmService
     }
 
     func onQueryChange(_ newQuery: String) {
@@ -40,6 +56,8 @@ final class AppState: ObservableObject {
         if let command = CommandMatcher.match(q) {
             results = [SearchResult.command(command: command)]
             selection = 0
+            // Clear any previous LLM state when the user types a command
+            llmReply = nil; llmError = nil
             return
         }
 
@@ -48,6 +66,56 @@ final class AppState: ObservableObject {
         if !Task.isCancelled {
             self.results = r
             self.selection = r.isEmpty ? nil : 0
+        }
+
+        // Phase 4.1.5: if the user typed a free-form question
+        // (Intent.ask), ask the LLM and stream the reply into
+        // `llmReply`. The SwiftUI view shows the reply as a separate
+        // section under the result list.
+        if case .ask(let query, let contextURLs) = intent {
+            await runLLMAsk(query: query, contextURLs: contextURLs)
+        } else {
+            // Non-ask query: clear any prior LLM state.
+            llmReply = nil; llmError = nil
+        }
+    }
+
+    // MARK: - LLM ask (Phase 4.1.5)
+
+    /// Fire an ask to the LLM. The reply (or error) is published
+    /// to `llmReply` / `llmError` so the SwiftUI view updates live.
+    /// If the user typed a second ask before the first finished, we
+    /// cancel the in-flight task — only the most recent question
+    /// gets a reply.
+    private func runLLMAsk(query: String, contextURLs: [URL]) async {
+        guard let service = llmService else {
+            // No LLM configured — show a clear message in the UI.
+            llmReply = "(No AI provider configured. Open Settings to pick Ollama or a custom endpoint.)"
+            return
+        }
+        // Cancel any in-flight LLM call; only the most recent ask matters.
+        llmTask?.cancel()
+        isLLMBusy = true
+        llmReply = nil
+        llmError = nil
+
+        llmTask = Task { [weak self] in
+            do {
+                let context = await LLMContext.from(urls: contextURLs)
+                let reply = try await service.ask(query: query, context: context)
+                if Task.isCancelled { return }
+                await MainActor.run {
+                    self?.llmReply = reply
+                    self?.isLLMBusy = false
+                }
+            } catch {
+                if Task.isCancelled { return }
+                await MainActor.run {
+                    self?.llmError = (error as? LocalizedError)?.errorDescription
+                        ?? error.localizedDescription
+                    self?.isLLMBusy = false
+                }
+            }
         }
     }
 

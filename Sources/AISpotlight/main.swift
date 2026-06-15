@@ -60,6 +60,16 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
         let ai = AIFactory.makeProvider(from: aiConfig)
         let interpreter = QueryInterpreter(aiProvider: ai)
 
+        // Phase 4.1.5: build the LLM conversation service. We use
+        // the same `ai` instance — if the user picked Ollama, the
+        // conversation goes to localhost:11434; if they picked
+        // "custom" with an OpenAI-compatible URL, it goes there;
+        // if they picked "none", this service exists but every
+        // ask returns an error (handled gracefully by AppState).
+        let llmService: LLMConversationService? = ai.map {
+            LLMConversationService(provider: $0)
+        }
+
         // Phase 3.1: create the on-disk content index. The
         // IndexStore's init copies IndexStore.pendingDispatchers
         // (set by injectAppKitDispatchers above) into its own map,
@@ -103,7 +113,7 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
             AppProvider(),
             contentProvider,
         ])
-        state = AppState(interpreter: interpreter, orchestrator: orchestrator)
+        state = AppState(interpreter: interpreter, orchestrator: orchestrator, llmService: llmService)
 
         // Start indexing in the background after a short delay
         // (let the UI settle first). The progress is published

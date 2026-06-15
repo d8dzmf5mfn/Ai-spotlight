@@ -33,8 +33,18 @@ public actor QueryInterpreter {
         let parsed = QueryParser.parse(trimmed)
         let final: Intent
         if case .unknown = parsed, let ai = aiProvider {
-            // Rule parser gave up — try the LLM. Any throw falls back to .unknown.
-            final = (try? await ai.classify(trimmed)) ?? parsed
+            // Rule parser gave up — Phase 4.1.5: route to LLM ask,
+            // not LLM classify. The query is most likely a free-form
+            // question (the rule parser already tried to find a
+            // filename or app name and gave up). LLM classify was
+            // for "map this to a find/open intent" but the new
+            // shape is "ask the LLM directly".
+            //
+            // Any throw falls back to .unknown so the rest of the
+            // pipeline still works without an LLM.
+            final = (try? await ai.ask(query: trimmed, context: .empty)).map {
+                .ask(query: $0.isEmpty ? trimmed : $0, contextURLs: [])
+            } ?? parsed
         } else {
             final = parsed
         }
