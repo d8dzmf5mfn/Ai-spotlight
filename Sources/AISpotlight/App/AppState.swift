@@ -378,6 +378,29 @@ final class AppState: ObservableObject {
                 self.query = ""
                 return
             }
+        case .findFile:
+            // The rule parser classified the query as a
+            // file-find ('find X' / 'where is report.pdf' /
+            // 'the polyester thing I mentioned'). If
+            // results is empty, fall back to the LLM —
+            // the user's follow-up question may rely on
+            // context from the prior turn ('the AI
+            // Spotlight I mentioned before') that the
+            // rule parser can't see, and the LLM is the
+            // only thing that can interpret it.
+            //
+            // This is the third arm of "Enter fallback" —
+            // paired with the .ask and .openApp arms
+            // above. Without it, follow-up questions
+            // starting with 'find' or 'where' would
+            // silently no-op whenever the file isn't on
+            // disk.
+            if results.isEmpty {
+                Log.write("[AppState] activate: findFile with no match, falling back to LLM ask")
+                await runLLMAsk(query: query, contextURLs: lastSearchContextURLs)
+                self.query = ""
+                return
+            }
         default:
             break
         }
