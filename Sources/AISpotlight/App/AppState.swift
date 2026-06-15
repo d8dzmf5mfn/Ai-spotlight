@@ -143,15 +143,26 @@ final class AppState: ObservableObject {
             do {
                 let context = await LLMContext.from(urls: contextURLs)
                 for try await chunk in service.askStreaming(query: query, context: context) {
-                    if Task.isCancelled { return }
-                    // Ignore the old task's outcome if a newer
-                    // runLLMAsk has been started.
+                    // Note: we intentionally do NOT check
+                    // Task.isCancelled inside the for loop. The
+                    // default implementation of
+                    // askStreaming is `AsyncThrowingStream { Task
+                    // { try await self.ask(...) } }` — when the
+                    // task is cancelled, the inner Task throws
+                    // out, the stream's continuation finishes
+                    // with the cancellation error, and the
+                    // `for try await` loop throws. If we
+                    // early-return inside the loop on
+                    // Task.isCancelled, we would skip the catch
+                    // block entirely — leaving isLLMBusy stuck
+                    // at true. The catch block below always
+                    // runs (with the generation guard) and
+                    // resets isLLMBusy.
                     await MainActor.run {
                         guard let self, self.llmGeneration == generation else { return }
                         self.llmReply = (self.llmReply ?? "") + chunk
                     }
                 }
-                if Task.isCancelled { return }
                 await MainActor.run {
                     guard let self, self.llmGeneration == generation else { return }
                     self.isLLMBusy = false
@@ -291,21 +302,36 @@ final class AppState: ObservableObject {
             return
         }
 
-        // Priority 2: no selection, intent is .ask → fire the
-        // LLM. This is the free-form question path.
+        // Priority 2: no selection, ask intent → fire LLM.
         let intent = await interpreter.interpret(query)
-        if case .ask(let q, let contextURLs) = intent {
+        switch intent {
+        case .ask(let q, let contextURLs):
             Log.write("[AppState] activate: no selection + ask intent, dispatching LLM")
             await runLLMAsk(query: q, contextURLs: contextURLs)
             self.query = ""
             return
+        case .openApp(let name):
+            // Single-word query that the rule parser (or
+            // router) classified as an app. If the user pressed
+            // Enter, the AppProvider has already shown results;
+            // if they didn't pick one (results is empty),
+            // fall back to asking the LLM. This makes
+            // 'hello' / 'random gibberish' fall into the
+            // LLM rather than appearing to do nothing.
+            if results.isEmpty {
+                Log.write("[AppState] activate: openApp '\(name)' with no match, falling back to LLM ask")
+                await runLLMAsk(query: query, contextURLs: [])
+                self.query = ""
+                return
+            }
+        default:
+            break
         }
 
-        // Priority 3: no selection, non-ask intent (e.g. a
-        // typo like "asdf" that the rule parser gave up on
-        // and the LLM router returned .unknown for). Do
-        // nothing — the user can either pick a result, keep
-        // typing, or press Escape.
+        // Priority 3: no selection, no ask intent, no usable
+        // openApp. Do nothing — the user can pick a result, keep
+        // typing, or press Escape. (Future: play a subtle 'no
+        // result' cue.)
         Log.write("[AppState] activate: no selection and no ask intent, doing nothing")
     }
 

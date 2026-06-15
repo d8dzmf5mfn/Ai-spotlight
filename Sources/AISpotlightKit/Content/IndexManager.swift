@@ -16,12 +16,18 @@ import Combine
 @MainActor
 public final class IndexManager: ObservableObject {
     /// Default directories the indexer walks if the user hasn't
-    /// added any custom roots. `~/Documents` and `~/Downloads`
-    /// per the zero-friction default rule in the Phase 3 plan.
+    /// The user's default index roots. Just `~/Documents` for
+    /// the zero-friction default — `~/Downloads` is full of
+    /// `.zip` / `.dmg` / `.iso` / `.pkg` files that inflate the
+    /// inverted index (Phase 3.1.5 measured 4-5 GB RSS for
+    /// 80k files across both directories). Users who want
+    /// Downloads indexed can add it via the IndexManager
+    /// init's `customRoots` parameter, or in Settings
+    /// (Phase 4.2.1).
     public static let defaultRoots: [URL] = {
         let fm = FileManager.default
         var dirs: [URL] = []
-        for type: FileManager.SearchPathDirectory in [.documentDirectory, .downloadsDirectory] {
+        for type: FileManager.SearchPathDirectory in [.documentDirectory] {
             if let url = fm.urls(for: type, in: .userDomainMask).first {
                 dirs.append(url)
             }
