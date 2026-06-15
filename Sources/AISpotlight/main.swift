@@ -59,15 +59,20 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
         let aiConfig = settings.resolveConfig()
         let ai = AIFactory.makeProvider(from: aiConfig)
 
-        // Phase 4.2: build the LLM-based intent router. We pass
-        // the same provider as the conversation service — a small
-        // local model (Ollama gemma2:2b) handles routing in 1-2
-        // seconds, which is acceptable for the search-bar
-        // debounce. If the user picked "none" or the LLM call
-        // fails, QueryInterpreter falls back to the rule parser
-        // automatically.
-        let llmRouter: LLMIntentRouter? = ai.map { LLMIntentRouter(provider: $0) }
-
+        // Phase 4.2.5: disable the LLMIntentRouter by default.
+        // Every keystroke past the 0.6s debounce was firing a
+        // separate LLM call to classify the intent (router ask,
+        // 1-2s on Ollama gemma2:2b). For a user typing a 5-word
+        // question, that's 5 redundant LLM calls, each one
+        // risking Ollama crash. The rule-based QueryParser
+        // handles the common cases (find X, open X, single-
+        // token app lookup) — the LLM router is only useful
+        // for free-form Chinese or other cases the rule parser
+        // gives up on. We make the router opt-in via a
+        // Settings toggle (Phase 4.2.6) — for now, default off
+        // to keep the system stable.
+        // let llmRouter: LLMIntentRouter? = ai.map { LLMIntentRouter(provider: $0) }
+        let llmRouter: LLMIntentRouter? = nil
         let interpreter = QueryInterpreter(aiProvider: ai, llmRouter: llmRouter)
 
         // Phase 4.1.5: build the LLM conversation service. We use
