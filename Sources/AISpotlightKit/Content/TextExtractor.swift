@@ -31,6 +31,8 @@ public enum TextExtractor {
     public static let supportedExtensions: Set<String> = [
         // Text
         "txt", "md", "markdown", "rst", "org", "log",
+        // PDFs (extracted via PDFKit — see PDFTextExtractor.swift)
+        "pdf",
         // Code (the long tail — anything we have an LSP server for, we
         // should index)
         "swift", "m", "mm", "h", "c", "cc", "cpp", "cxx", "hpp",

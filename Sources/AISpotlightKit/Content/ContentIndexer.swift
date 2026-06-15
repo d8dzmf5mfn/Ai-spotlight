@@ -279,16 +279,31 @@ public actor ContentIndexer {
     // MARK: - Ingest
 
     private func ingest(_ url: URL) async throws {
-        let data = try Data(contentsOf: url, options: [.mappedIfSafe])
-        // Quick sanity: must be valid UTF-8 to be indexable. If not,
-        // skip (likely a binary file with a text extension).
-        guard String(data: data, encoding: .utf8) != nil else { return }
-
+        // Get mtime + size up front; the actual text extraction
+        // method depends on the file's extension.
         let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
         let mtime = (attrs[.modificationDate] as? Date) ?? Date()
-        let size = (attrs[.size] as? Int) ?? data.count
+        let size = (attrs[.size] as? Int) ?? 0
 
-        let text = String(data: data, encoding: .utf8) ?? ""
+        // Dispatch on extension. Plain text files use the fast path
+        // (read → UTF-8 decode). PDFs go through PDFKit. Future
+        // extensions (RTF, DOCX) plug in here too.
+        let ext = url.pathExtension.lowercased()
+        let text: String
+        switch ext {
+        case "pdf":
+            text = (try? PDFTextExtractor.extract(url)) ?? ""
+        default:
+            // Plain text: read into memory, decode as UTF-8, skip if
+            // the file is binary (the "file has .md extension but is
+            // really a binary blob" case — not worth indexing).
+            guard let data = try? Data(contentsOf: url, options: [.mappedIfSafe]),
+                  let decoded = String(data: data, encoding: .utf8) else {
+                return
+            }
+            text = decoded
+        }
+
         let tokenSet = Set(TextExtractor.tokenize(text).map(\.term))
         let doc = IndexDocument(url: url, mtime: mtime, byteSize: size)
         await store.upsert(doc, terms: tokenSet)
