@@ -251,6 +251,15 @@ final class AppState: ObservableObject {
             switch nsError.code {
             case -1004: // Could not connect
                 return "Ollama is not running. Start it with: ollama serve"
+            case -1005: // Network connection lost
+                // Distinct from -1004: this means the connection
+                // WAS up and then died — usually Ollama crashed
+                // (often jetsam-killed on a memory-constrained Mac
+                // when running a 12B+ model). The user-visible
+                // message distinguishes the two cases so they
+                // know to check `ollama ps` and possibly pick
+                // a smaller model.
+                return "Ollama crashed mid-response (often due to running a model too large for your Mac's RAM). Try a smaller model in Settings, or restart Ollama."
             case -1001: // Timed out
                 return "LLM timed out. The model may be too large for your Mac, or the prompt was too long."
             case -1003: // Host not found

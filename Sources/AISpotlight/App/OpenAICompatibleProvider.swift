@@ -156,18 +156,25 @@ public final class OpenAICompatibleProvider: AIProvider, @unchecked Sendable {
     /// Parse a single SSE line. Returns the content delta or
     /// nil for non-data lines / keep-alives / the [DONE]
     /// sentinel / empty payloads.
+    ///
+    /// **Phase 4.2.5 fix (external review):** Ollama 0.5+ uses
+    /// a different streaming shape than OpenAI. OpenAI:
+    ///   `data: {"choices": [{"delta": {"content": "..."}}]}`
+    /// Ollama:
+    ///   `data: {"response": "...", "done": false}`
+    /// We now support BOTH so the same code path works
+    /// against both endpoints.
     private static func parseSSELine(_ line: String) -> String? {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.hasPrefix("data: ") else { return nil }
         let json = String(trimmed.dropFirst("data: ".count))
         if json == "[DONE]" { return "" }  // terminator; no content
-        // Parse the OpenAI / Ollama streaming chunk shape:
-        // { "choices": [{ "delta": { "content": "..." } }] }
-        // We use a tiny JSON parser instead of a full Codable
-        // struct because there are half a dozen optional
-        // fields (finish_reason, index, logprobs, ...) that
-        // we don't care about.
         guard let data = json.data(using: .utf8) else { return nil }
+
+        // Single struct that supports BOTH OpenAI's
+        // choices[0].delta.content AND Ollama's response.
+        // Both fields are optional, so a JSON object with
+        // either one is fine.
         struct WireChunk: Decodable {
             struct Choice: Decodable {
                 struct Delta: Decodable {
@@ -176,11 +183,22 @@ public final class OpenAICompatibleProvider: AIProvider, @unchecked Sendable {
                 let delta: Delta?
             }
             let choices: [Choice]?
+            // Ollama streaming shape: {"response": "...",
+            // "done": false, "model": "gemma4:12b", ...}
+            let response: String?
+            let done: Bool?
         }
-        guard let wire = try? JSONDecoder().decode(WireChunk.self, from: data),
-              let content = wire.choices?.first?.delta?.content
-        else { return nil }
-        return content
+        guard let wire = try? JSONDecoder().decode(WireChunk.self, from: data) else {
+            return nil
+        }
+        // Prefer OpenAI shape, fall back to Ollama shape.
+        if let content = wire.choices?.first?.delta?.content, !content.isEmpty {
+            return content
+        }
+        if let response = wire.response, !response.isEmpty {
+            return response
+        }
+        return nil
     }
 
     // MARK: - Wire format
