@@ -60,6 +60,18 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Content Index") {
+                // Phase 3.2.2: user picks which categories of files
+                // get indexed. Defaults are all on (zero-friction).
+                // Note: only "code" and "rich text" are exposed in the
+                // MVP. Text/data and PDFs are always indexed — they
+                // have no privacy angle worth a toggle.
+                Toggle("Source code files", isOn: $store.indexCodeFiles)
+                    .help("Swift, Python, JS, etc. — turn off for privacy.")
+                Toggle("Rich text & HTML", isOn: $store.indexRichTextFiles)
+                    .help("RTF, HTML — parsed via NSAttributedString.")
+            }
+
             Section("Hotkey") {
                 KeyboardShortcuts.Recorder("Toggle AI Spotlight:",
                                           name: HotkeyService.togglePanelName)

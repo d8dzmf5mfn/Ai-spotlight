@@ -38,6 +38,17 @@ final class SettingsStore: ObservableObject {
         didSet { defaults.set(ollamaModel, forKey: Self.kOllama) }
     }
 
+    // MARK: Index allow-list (Phase 3.2.2)
+    /// Whether to index source code files. Privacy-sensitive users
+    /// turn this off; the rest leave it on (the default).
+    @Published var indexCodeFiles: Bool {
+        didSet { defaults.set(indexCodeFiles, forKey: Self.kIndexCode) }
+    }
+    /// Whether to index rich-text files (.rtf, .rtfd, .html, .htm).
+    @Published var indexRichTextFiles: Bool {
+        didSet { defaults.set(indexRichTextFiles, forKey: Self.kIndexRich) }
+    }
+
     init(keychain: KeychainStoring = KeychainStore()) {
         self.keychain = keychain
         // user decision: open-box, no key needed by default
@@ -46,7 +57,13 @@ final class SettingsStore: ObservableObject {
         self.customModel     = defaults.string(forKey: Self.kModel)     ?? "gpt-4o-mini"
         self.ollamaModel     = defaults.string(forKey: Self.kOllama)    ?? "gemma2:2b"
         self.customAPIKey    = (try? keychain.get(Self.kKeychain)) ?? ""
+        // Default both ON — zero-friction: the user opts out.
+        self.indexCodeFiles = defaults.object(forKey: Self.kIndexCode) as? Bool ?? true
+        self.indexRichTextFiles = defaults.object(forKey: Self.kIndexRich) as? Bool ?? true
     }
+
+    private static let kIndexCode = "indexCodeFiles"
+    private static let kIndexRich = "indexRichTextFiles"
 
     func saveKeys() {
         if !customAPIKey.isEmpty {
