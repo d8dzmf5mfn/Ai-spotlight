@@ -81,7 +81,7 @@ struct SearchWindowView: View {
                 ResultListView(
                     results: $state.results,
                     selection: $state.selection,
-                    onActivate: { _ in state.activate() }
+                    onActivate: { _ in await state.activate() }
                 )
                 .frame(maxHeight: 200)
             }

@@ -4,7 +4,7 @@ import AISpotlightKit
 struct ResultListView: View {
     @Binding var results: [SearchResult]
     @Binding var selection: Int?
-    let onActivate: (SearchResult) -> Void
+    let onActivate: (SearchResult) async -> Void
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -13,7 +13,7 @@ struct ResultListView: View {
                     ForEach(Array(results.enumerated()), id: \.element.id) { idx, r in
                         ResultRowView(result: r, isSelected: selection == idx)
                             .id(idx)
-                            .onTapGesture { onActivate(r) }
+                            .onTapGesture { Task { await onActivate(r) } }
                     }
                 }
             }

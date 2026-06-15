@@ -6,7 +6,7 @@ import AppKit
 struct SearchField: NSViewRepresentable {
     @Binding var text: String
     var placeholder: String = "Search…"
-    let onSubmit: () -> Void
+    let onSubmit: () async -> Void
 
     func makeNSView(context: Context) -> NSTextField {
         let tf = NSTextField()
@@ -39,7 +39,7 @@ struct SearchField: NSViewRepresentable {
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             // Enter key
             if commandSelector == #selector(NSResponder.insertNewline(_:)) {
-                parent.onSubmit()
+                Task { await parent.onSubmit() }
                 return true
             }
             return false

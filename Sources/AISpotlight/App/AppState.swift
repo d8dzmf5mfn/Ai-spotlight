@@ -79,26 +79,27 @@ final class AppState: ObservableObject {
             self.selection = r.isEmpty ? nil : 0
         }
 
-        // Phase 4.1.5: if the user typed a free-form question
-        // (Intent.ask), ask the LLM and stream the reply into
-        // `llmReply`. The SwiftUI view shows the reply as a separate
-        // section under the result list.
-        if case .ask(let query, let contextURLs) = intent {
-            Log.write("[AppState] Intent.ask detected: q=\(query.prefix(60)) contextURLs=\(contextURLs.count)")
-            await runLLMAsk(query: query, contextURLs: contextURLs)
-            // Phase 4.2: clear the input field after the ask is
-            // dispatched, so the user sees the LLM reply in the
-            // panel without the original question still in the
-            // text field. Without this, the panel looks cluttered
-            // (the user typed it, the LLM answered, but the
-            // text field still shows the question). The debounce
-            // already prevents re-firing on this same query.
-            self.query = ""
+        // Phase 4.2.x: do NOT auto-trigger LLM ask here. We
+        // classify the intent (so the user can see the preview
+        // state), but the actual LLM streaming is gated on
+        // user confirmation (press Enter). Without this, every
+        // keystroke past 0.6s of inactivity would silently
+        // start a 5-10s Ollama call, hammering the LLM and
+        // making the UI feel like it's "thinking" without the
+        // user asking. The LLM ask is fired from
+        // `activate()` (user pressed Enter) below.
+        if case .ask = intent {
+            // Don't clear LLM state here — we want the user to
+            // see the AI section header so they know pressing
+            // Enter will ask the LLM. Just keep the state as-is
+            // (no reply, no error, not busy) so the section
+            // header is visible but the body is empty.
+            // (Phase 4.2.1 will add an "ask?" prompt here.)
         } else {
             // Non-ask query: clear any prior LLM state.
             llmReply = nil; llmError = nil
-            Log.write("[AppState] Intent is not ask: \(intent)")
         }
+        Log.write("[AppState] runSearch done for q=\(q.prefix(60)), will NOT auto-ask")
     }
 
     // MARK: - LLM ask (Phase 4.1.5)
@@ -155,7 +156,30 @@ final class AppState: ObservableObject {
         selection = next
     }
 
-    func activate() {
+    /// Called when the user presses Enter in the search field.
+    /// If the most recent query was classified as a free-form
+    /// LLM question, fire the LLM ask (and clear the input
+    /// field). Otherwise, open the selected search result.
+    ///
+    /// Phase 4.2.x: This is the ONLY way the LLM gets asked —
+    /// `onQueryChange` (debounced) only updates the search
+    /// preview, never the LLM. This is what the user expects:
+    /// typing is search-preview, Enter is commit.
+    func activate() async {
+        // Re-classify the current query against the (cached)
+        // interpreter. The cache makes this near-O(1) in
+        // practice. If the cache is cold (e.g. user pasted
+        // text and immediately pressed Enter in <600ms), the
+        // interpreter will route through the LLM router and
+        // back to the rule parser; either way we get an Intent.
+        let intent = await interpreter.interpret(query)
+        if case .ask(let q, let contextURLs) = intent {
+            Log.write("[AppState] activate: user pressed Enter on ask query, dispatching LLM")
+            await runLLMAsk(query: q, contextURLs: contextURLs)
+            self.query = ""
+            return
+        }
+
         guard let i = selection, results.indices.contains(i) else { return }
         let r = results[i]
 
