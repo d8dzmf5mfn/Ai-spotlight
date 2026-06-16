@@ -7,6 +7,7 @@ struct SettingsView: View {
     @StateObject private var discovery = LocalModelDiscoveryState()
 
     var body: some View {
+        ScrollView {
         Form {
             Section("AI Provider") {
                 Picker("Provider", selection: $store.activeProvider) {
@@ -144,7 +145,20 @@ struct SettingsView: View {
             }
         }
         .padding(20)
-        .frame(width: 480, height: 500)
+        // Phase 4.6: the Settings UI grew with cloud-model
+        // presets, model size warnings, and the test-
+        // connection button. The old fixed 480x500 frame
+        // clipped the URL field, the preset dropdown
+        // labels (e.g. "ByteDance Doubao (豆包)"), and the
+        // accessibility-permission warning. We now use
+        // ScrollView + ideal width/height so the window
+        // fits the content but can also be resized if
+        // the user prefers a larger layout. The ideal
+        // values are larger than the old fixed values.
+        .frame(
+            minWidth: 540, idealWidth: 600, maxWidth: .infinity,
+            minHeight: 480, idealHeight: 560, maxHeight: .infinity
+        )
         .safeAreaInset(edge: .bottom) {
             HStack {
                 Spacer()
@@ -153,6 +167,7 @@ struct SettingsView: View {
             }
             .padding(.horizontal, 20).padding(.vertical, 10)
             .background(.bar)
+        }
         }
     }
 
