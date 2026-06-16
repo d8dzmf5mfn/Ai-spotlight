@@ -39,6 +39,15 @@ final class SettingsStore: ObservableObject {
     }
     @Published var customAPIKey: String = "" {
         didSet {
+            // Phase 5-E fix: save to Keychain on change.
+            // The previous code only loaded from Keychain
+            // on init and never wrote back. If the app
+            // was restarted, the new key was lost.
+            if !customAPIKey.isEmpty {
+                try? keychain.set(customAPIKey, for: Self.kKeychain)
+            } else {
+                try? keychain.delete(Self.kKeychain)
+            }
             pushConfigToProvider()
         }
     }
@@ -177,12 +186,20 @@ final class SettingsStore: ObservableObject {
         // Always set the model — it's the most user-visible
         // setting and changes when a new provider is picked.
         customModel = preset.defaultModel
-        // For the URL: only set if it's empty or still
-        // equals the current preset's value (meaning the
-        // user hasn't manually edited it).
-        if customBaseURL.isEmpty {
-            customBaseURL = preset.defaultBaseURL
-        }
+        // For the URL: always set it to the preset's default.
+        // Phase 5-E fix: the previous code guarded with
+        // `if customBaseURL.isEmpty`, which meant that
+        // changing from one preset to another (e.g. from
+        // a custom "governor" endpoint to DeepSeek) would
+        // NOT update the URL. The old URL persisted, the
+        // running provider sent requests to the old host,
+        // and the user got "HTTP 401 -Authentication Fails
+        // (governor)" even though the Settings UI showed
+        // the new provider's green "Test connection" status.
+        // If the user wants a custom URL they use the
+        // "Custom" preset, which has an empty default URL
+        // and lets them type freely.
+        customBaseURL = preset.defaultBaseURL
         // Phase 5-B: trigger a model discovery so the
         // Picker populates immediately. The user can also
         // click "Refresh" to re-fetch on demand.
@@ -224,12 +241,6 @@ final class SettingsStore: ObservableObject {
 
     private static let kIndexCode = "indexCodeFiles"
     private static let kIndexRich = "indexRichTextFiles"
-
-    func saveKeys() {
-        if !customAPIKey.isEmpty {
-            try? keychain.set(customAPIKey, for: Self.kKeychain)
-        }
-    }
 
     /// Resolve the active configuration into a concrete `AIConfig` value that
     /// the AIFactory can consume. `none` → nil (caller falls back to rules).
