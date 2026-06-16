@@ -108,7 +108,7 @@ public final class LLMConversationService: @unchecked Sendable {
                               history: [HistoryEntry] = [],
                               context: LLMContext = .empty,
                               registry: LLMToolRegistry,
-                              maxToolTurns: Int = 2,
+                              maxToolTurns: Int = 3,
                               onToolStart: (@Sendable (String) async -> Void)? = nil) async throws -> AskWithToolsResult {
         var turns = history
         turns.append(HistoryEntry(role: .user, text: query))
