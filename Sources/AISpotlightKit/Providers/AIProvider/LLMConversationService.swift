@@ -199,25 +199,18 @@ public final class LLMConversationService: @unchecked Sendable {
     private func buildToolSystemBlock(registry: LLMToolRegistry,
                                        context: LLMContext) async -> String {
         let toolsPrompt = await registry.toolsForPrompt()
-        // Phase 5-I: even shorter system block, with no
-        // explicit reference to file system commands. The
-        // previous 300-token block (Phase 5-D) was still
-        // being rejected by DeepSeek's governor when the
-        // tool description mentioned "mdfind" / "Spotlight"
-        // / "kMDItemTextContent" — DeepSeek's content
-        // moderation interprets those tokens as
-        // instructions to bypass safety or exfiltrate
-        // user data. We stripped the same terminology
-        // from the tool description (Phase 5-I,
-        // BuiltinTools.swift) and from the system prompt
-        // here. Total: a one-paragraph preamble plus the
-        // tools, no example, no mdfind, no Spotlight.
         var out = "You are a helpful assistant.\n"
         if !toolsPrompt.isEmpty {
-            out += "\n" + toolsPrompt + "\n"
+            out += toolsPrompt + "\n"
         }
-        out += "\nReply in plain text unless you need a tool. "
-        out += "If you need a tool, output exactly one JSON object with the tool name and arguments."
+        // Phase 5-J: stop the tool-calling loop.
+        out += "\nRules:\n"
+        out += "- Call AT MOST ONE tool per question.\n"
+        out += "- After the tool returns, answer in plain text.\n"
+        out += "- Do NOT call another tool. Just answer.\n"
+        out += "- If the tool found nothing, say so.\n"
+        out += "- To call a tool: {\"tool\": \"<name>\", \"args\": {<params>}}\n"
+        out += "- No other text before or after the JSON.\n"
         return out
     }
 
