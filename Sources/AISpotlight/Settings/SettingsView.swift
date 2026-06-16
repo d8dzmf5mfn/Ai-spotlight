@@ -96,7 +96,13 @@ struct SettingsView: View {
                         }
                     }
                     TextField("Base URL", text: $store.customBaseURL, prompt: Text("https://api.openai.com/v1"))
-                    TextField("Model", text: $store.customModel, prompt: Text("gpt-4o-mini"))
+                    // Phase 5-B: the model field is now a Picker
+                    // when discovery has populated the list, OR
+                    // a freeform TextField when the user picks
+                    // "Type manually...". The Picker calls
+                    // ModelDiscoveryService on preset change
+                    // (see SettingsStore.applyPreset).
+                    modelField
                     SecureField("API key (leave blank for providers that don't require one)",
                                 text: $store.customAPIKey)
                     HStack {
@@ -264,6 +270,81 @@ struct SettingsView: View {
         case "failure": return .red
         default: return .secondary
         }
+    }
+
+    /// Phase 5-B: the model name field. Smart field that
+    /// shows a Picker when discovery has populated the
+    /// model list, or a TextField when the user has chosen
+    /// to type manually. The "Refresh" button is shown
+    /// alongside the field so the user can re-fetch on
+    /// demand.
+    @ViewBuilder
+    private var modelField: some View {
+        let canDiscover = Self.canDiscoverModels(for: store.selectedPreset)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                if store.useManualModel || !canDiscover || store.discoveredModels.isEmpty {
+                    TextField("Model", text: $store.customModel, prompt: Text("gpt-4o-mini"))
+                } else {
+                    Picker("Model", selection: $store.customModel) {
+                        ForEach(store.discoveredModels, id: \.self) { m in
+                            Text(m).tag(m)
+                        }
+                    }
+                }
+                Button {
+                    Task { await store.refreshModels() }
+                } label: {
+                    if store.isDiscoveringModels {
+                        ProgressView().scaleEffect(0.5).frame(width: 14, height: 14)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
+                .disabled(store.isDiscoveringModels || !canDiscover)
+                .help("Refresh model list")
+            }
+            if let err = store.modelDiscoveryError {
+                Text(err).font(.caption).foregroundStyle(.red)
+            } else if let last = store.lastModelRefresh {
+                Text("Last refresh: " + Self.relativeTime(last))
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if !canDiscover {
+                Text("This provider has no /v1/models endpoint. Type the model name.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if canDiscover && !store.useManualModel && !store.discoveredModels.isEmpty {
+                Button("Type a custom model name instead") { store.useManualModel = true }
+                    .font(.caption).buttonStyle(.link)
+            } else if canDiscover && store.useManualModel {
+                Button("Pick from the list") { store.useManualModel = false }
+                    .font(.caption).buttonStyle(.link)
+            }
+        }
+    }
+
+    /// Phase 5-B: hardcoded map of provider id to whether
+    /// the provider exposes a /v1/models (or /api/tags for
+    /// Ollama) endpoint. We use this sync helper because
+    /// @ViewBuilder can't do async. In commit C we'll
+    /// switch SettingsView to use the ProviderDescriptor
+    /// directly and delete this helper.
+    private static func canDiscoverModels(for id: String) -> Bool {
+        return id != "anthropic"
+    }
+
+    /// Phase 5-B: format a Date as a short relative time
+    /// string ("2 min ago", "5 sec ago"). Pure function.
+    private static func relativeTime(_ date: Date) -> String {
+        let seconds = Int(Date().timeIntervalSince(date))
+        if seconds < 5 { return "just now" }
+        if seconds < 60 { return "\(seconds) sec ago" }
+        let minutes = seconds / 60
+        if minutes < 60 { return "\(minutes) min ago" }
+        let hours = minutes / 60
+        if hours < 24 { return "\(hours) hr ago" }
+        let days = hours / 24
+        return "\(days) day\(days == 1 ? "" : "s") ago"
     }
 }
 

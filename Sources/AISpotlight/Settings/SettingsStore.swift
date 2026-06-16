@@ -39,6 +39,58 @@ final class SettingsStore: ObservableObject {
     /// provider from the dropdown. When nil, no preset is
     /// active (e.g. fresh install before user picks one).
     @Published var selectedPreset: String = "openai"
+
+    // MARK: Phase 5-B model discovery
+    /// The list of models the user can pick from. Populated
+    /// by `ModelDiscoveryService.refresh(...)`. Empty until
+    /// the user clicks "Refresh models" or the picker is
+    /// opened for the first time.
+    @Published var discoveredModels: [String] = []
+    /// True while a discovery HTTP call is in flight.
+    @Published var isDiscoveringModels: Bool = false
+    /// When the last discovery call completed. Shown in
+    /// the UI as "Last refresh: 2 min ago".
+    @Published var lastModelRefresh: Date? = nil
+    /// Error from the last discovery call, if any.
+    @Published var modelDiscoveryError: String? = nil
+
+    /// Run a model discovery. Safe to call concurrently —
+    /// the service is an actor.
+    func refreshModels() async {
+        guard let descriptor = await ProviderRegistry.shared.descriptor(for: selectedPreset) else {
+            modelDiscoveryError = "Unknown provider: \(selectedPreset)"
+            return
+        }
+        isDiscoveringModels = true
+        modelDiscoveryError = nil
+        defer { isDiscoveringModels = false }
+        let service = ModelDiscoveryService()
+        // Build the baseURL: descriptor's default + user's override.
+        let baseURL = customBaseURL.isEmpty ? descriptor.defaultBaseURL : customBaseURL
+        do {
+            // Anthropic + others with staticCatalog have no
+            // network call — the discovery service just
+            // returns the static list. That's still useful
+            // because it sets lastModelRefresh and clears
+            // the error.
+            let models = try await service.refresh(
+                descriptor: descriptor,
+                baseURL: baseURL,
+                apiKey: customAPIKey
+            )
+            discoveredModels = models
+            lastModelRefresh = Date()
+        } catch let e as DiscoveryError {
+            modelDiscoveryError = e.errorDescription
+        } catch {
+            modelDiscoveryError = error.localizedDescription
+        }
+    }
+
+    /// True if the user has typed a custom model name not
+    /// in the discovered list. The Picker shows a
+    /// "Type manually..." row that toggles this.
+    @Published var useManualModel: Bool = false
     /// Live status of the "Test connection" button in
     /// SettingsView. UI shows this next to the button.
     @Published var testResult: TestResult = .none
@@ -83,6 +135,14 @@ final class SettingsStore: ObservableObject {
         if customBaseURL.isEmpty {
             customBaseURL = preset.defaultBaseURL
         }
+        // Phase 5-B: trigger a model discovery so the
+        // Picker populates immediately. The user can also
+        // click "Refresh" to re-fetch on demand.
+        useManualModel = false
+        discoveredModels = []
+        lastModelRefresh = nil
+        modelDiscoveryError = nil
+        Task { await refreshModels() }
     }
 
     // MARK: Ollama-specific (shared defaults with custom; user can override)
