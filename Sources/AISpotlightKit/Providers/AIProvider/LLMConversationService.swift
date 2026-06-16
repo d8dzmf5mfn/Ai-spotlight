@@ -109,7 +109,8 @@ public final class LLMConversationService: @unchecked Sendable {
                               context: LLMContext = .empty,
                               registry: LLMToolRegistry,
                               maxToolTurns: Int = 3,
-                              onToolStart: (@Sendable (String) async -> Void)? = nil) async throws -> AskWithToolsResult {
+                              onToolStart: (@Sendable (String) async -> Void)? = nil,
+                              onConsentNeeded: (@Sendable (String, [String: String]) async -> Bool)? = nil) async throws -> AskWithToolsResult {
         var turns = history
         turns.append(HistoryEntry(role: .user, text: query))
         var toolCalls: [ExecutedToolCall] = []
@@ -141,6 +142,49 @@ public final class LLMConversationService: @unchecked Sendable {
             // search_files..." progress while the tool runs.
             if let cb = onToolStart {
                 await cb(call.tool)
+            }
+            // Phase 5-F (Phase 4.3 spec): user-consent gate.
+            // If the tool requires consent, ask the caller
+            // (the AppState) to surface a UI dialog. The
+            // callback returns true if the user approved,
+            // false if they denied. We honor the decision
+            // before invoking the handler — denied tools
+            // never run.
+            if tool.requiresConsent {
+                guard let consent = onConsentNeeded else {
+                    // No consent gate configured by the
+                    // caller. Default to deny for safety:
+                    // a missing consent handler means the
+                    // UI is not ready to ask, so we should
+                    // not run a destructive tool.
+                    let denial = "Tool [\(call.tool)] denied: no consent handler is registered."
+                    turns.append(HistoryEntry(role: .user, text: denial))
+                    toolCalls.append(ExecutedToolCall(
+                        tool: call.tool,
+                        args: call.args,
+                        summary: "DENIED (no consent handler)"
+                    ))
+                    continue
+                }
+                var argsDisplay: [String: String] = [:]
+                for (k, v) in call.args {
+                    if let toolVal = v as? LLMToolValue {
+                        argsDisplay[k] = toolVal.displayString
+                    } else {
+                        argsDisplay[k] = String(describing: v)
+                    }
+                }
+                let approved = await consent(call.tool, argsDisplay)
+                if !approved {
+                    let denial = "Tool [\(call.tool)] denied by user."
+                    turns.append(HistoryEntry(role: .user, text: denial))
+                    toolCalls.append(ExecutedToolCall(
+                        tool: call.tool,
+                        args: call.args,
+                        summary: "DENIED by user"
+                    ))
+                    continue
+                }
             }
             // Execute the tool.
             do {

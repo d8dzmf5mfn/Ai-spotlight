@@ -112,6 +112,19 @@ final class AppState: ObservableObject {
     /// after. UI uses this to show "🔧 using search_files..."
     /// progress while the tool is in flight.
     @Published var currentToolName: String? = nil
+    /// Phase 5-F: pending user-consent request for a tool call.
+    /// When the LLM tries to call a `requiresConsent = true` tool,
+    /// we set this tuple and the SearchWindowView shows a modal
+    /// asking the user to approve or deny. The async continuation
+    /// stored in `pendingConsentContinuation` is resumed when the
+    /// user clicks Allow or Deny.
+    @Published var pendingConsent: PendingConsent? = nil
+    /// continuation to resume after the user picks Allow/Deny
+    private var pendingConsentContinuation: CheckedContinuation<Bool, Never>? = nil
+    public struct PendingConsent: Equatable, Sendable {
+        public let tool: String
+        public let args: String  // pre-formatted for display
+    }
 
     /// Phase 4.3.2: the tool registry the LLM can call. Wired
     /// in from main.swift. Set to `nil` to disable tool use.
@@ -354,6 +367,16 @@ final class AppState: ObservableObject {
                             guard let self, self.llmGeneration == currentGeneration else { return }
                             self.currentToolName = toolName
                         }
+                    } onConsentNeeded: { tool, args in
+                        // Phase 5-F: ask the user to confirm a
+                        // requiresConsent tool call. The dialog
+                        // is presented by SearchWindowView via
+                        // the published pendingConsent state.
+                        // We suspend until the user clicks
+                        // Allow or Deny, then resume.
+                        return await self?.requestUserConsent(
+                            tool: tool, args: args
+                        ) ?? false
                     }
                     if Task.isCancelled { return }
                     await MainActor.run {
@@ -742,6 +765,46 @@ final class AppState: ObservableObject {
     /// panel's current results list isn't disturbed.
     func openLLMReplyPath(_ url: URL) {
         NSWorkspace.shared.open(url)
+    }
+
+    /// Phase 5-F: show a consent dialog for a requiresConsent
+    /// tool call. Suspends on an async continuation until
+    /// the user clicks Allow or Deny in the dialog (which
+    /// resumes via `respondToConsent(approved:)`).
+    @MainActor
+    func requestUserConsent(tool: String, args: [String: String]) async -> Bool {
+        // Format the args for display. We don't show the
+        // full arg dump — just the first 2 keys with their
+        // truncated values, since most tools have 1-2
+        // meaningful args.
+        let argDescription: String
+        if args.isEmpty {
+            argDescription = "(no arguments)"
+        } else {
+            let lines = args.sorted { $0.key < $1.key }.prefix(2).map { (k, v) in
+                let truncated = v.count > 60 ? String(v.prefix(60)) + "…" : v
+                return "  \(k): \(truncated)"
+            }
+            argDescription = lines.joined(separator: "\n")
+        }
+        pendingConsent = PendingConsent(tool: tool, args: argDescription)
+        // The continuation is set up by SearchWindowView
+        // when it observes pendingConsent = ... and is
+        // resumed by respondToConsent.
+        return await withCheckedContinuation { cont in
+            self.pendingConsentContinuation = cont
+        }
+    }
+
+    /// Called by the consent dialog when the user clicks
+    /// Allow or Deny. Resumes the suspended askWithTools
+    /// loop with the user's decision.
+    @MainActor
+    func respondToConsent(approved: Bool) {
+        guard let cont = pendingConsentContinuation else { return }
+        pendingConsentContinuation = nil
+        pendingConsent = nil
+        cont.resume(returning: approved)
     }
 }
 

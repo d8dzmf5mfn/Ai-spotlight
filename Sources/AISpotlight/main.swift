@@ -169,11 +169,17 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
         let searchTool = BuiltinTools.searchFiles()
         let openTool = BuiltinTools.openFile()
         let appsTool = BuiltinTools.listApps()
+        // Phase 5-F: register the requiresConsent shell tool
+        // so the consent dialog can be exercised during dev.
+        // In a future commit we'll add a Settings toggle to
+        // disable this; for now it's always available.
+        let shellTool = BuiltinTools.runShell()
         let sema = DispatchSemaphore(value: 0)
         Task.detached(priority: .userInitiated) {
             await toolRegistry.register(searchTool)
             await toolRegistry.register(openTool)
             await toolRegistry.register(appsTool)
+            await toolRegistry.register(shellTool)
             sema.signal()
         }
         // .now() returns immediately if already signalled;

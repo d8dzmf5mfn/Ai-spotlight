@@ -95,6 +95,31 @@ public enum LLMToolValue: Sendable, Codable, Equatable {
     case dict([String: LLMToolValue])
     case null
 
+    /// Phase 5-F: human-readable form of the value, for the
+    /// user-consent dialog. We render this when the LLM is
+    /// about to call a `requiresConsent` tool and we need to
+    /// show the user what's going to happen. The dialog
+    /// shows the first 2 args (truncated), so this is what
+    /// gets displayed.
+    public var displayString: String {
+        switch self {
+        case .string(let s): return s
+        case .int(let i): return String(i)
+        case .double(let d): return String(d)
+        case .bool(let b): return b ? "true" : "false"
+        case .array(let a):
+            if let data = try? JSONEncoder().encode(a),
+               let s = String(data: data, encoding: .utf8) {
+                return s
+            }
+            return "(array)"
+        case .dict:
+            return "(object)"
+        case .null:
+            return "(null)"
+        }
+    }
+
     public init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
         if c.decodeNil() { self = .null; return }

@@ -30,21 +30,38 @@ final class QueryInterpreterTests: XCTestCase {
         let ai = CountingAIProvider(canned: .findFile(name: "report", dateFilter: nil, kind: .pdf))
         let interp = QueryInterpreter(aiProvider: ai)
         // "asdf qwerty" — gibberish, no verb/kind/date, rules return unknown
+        // Phase 4.2.5: the LLMIntentRouter is disabled by default
+        // (every keystroke was firing a separate LLM call). The
+        // rule parser now returns .ask for unknown queries, and
+        // the LLM is invoked later via the askWithTools path, not
+        // here in interpret(). This test now asserts that the
+        // rule path returns .ask (not a parsed intent) and the
+        // AI is not called during interpret() at all.
         let intent = await interp.interpret("asdf qwerty")
-        XCTAssertEqual(intent, .findFile(name: "report", dateFilter: nil, kind: .pdf),
-                       "AI classify result should win when rules return unknown")
+        XCTAssertEqual(intent, .ask(query: "asdf qwerty", contextURLs: []),
+                       "Unknown queries fall through to .ask for the LLM askWithTools path")
         let calls = await ai.callCount
-        XCTAssertEqual(calls, 1, "AI must be called exactly once")
+        XCTAssertEqual(calls, 0, "AI router is disabled; interpretation never calls AI")
     }
 
     func testCacheHitsAvoidRecomputation() async {
         let ai = CountingAIProvider(canned: .openApp(name: "X"))
         let interp = QueryInterpreter(aiProvider: ai)
-        _ = await interp.interpret("asdf qwerty")
-        _ = await interp.interpret("asdf qwerty")
-        _ = await interp.interpret("asdf qwerty")
+        // With the AI router disabled, the rule parser returns
+        // .ask deterministically for gibberish. Calling interpret
+        // 3 times should produce identical results and never
+        // call the AI provider. (The "cache" property of the
+        // old LLMIntentRouter is no longer relevant — the new
+        // design moves the LLM call out of interpret() and
+        // into a separate askWithTools path.)
+        let intent1 = await interp.interpret("asdf qwerty")
+        let intent2 = await interp.interpret("asdf qwerty")
+        let intent3 = await interp.interpret("asdf qwerty")
+        XCTAssertEqual(intent1, intent2)
+        XCTAssertEqual(intent2, intent3)
+        XCTAssertEqual(intent1, .ask(query: "asdf qwerty", contextURLs: []))
         let calls = await ai.callCount
-        XCTAssertEqual(calls, 1, "Second+ third calls must hit cache, not AI")
+        XCTAssertEqual(calls, 0, "AI is not called during interpret() — moved to askWithTools")
     }
 
     func testNilAIFallsBackToRules() async {

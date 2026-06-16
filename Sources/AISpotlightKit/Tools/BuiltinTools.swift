@@ -176,6 +176,52 @@ public enum BuiltinTools {
             )
         }
     }
+
+    /// Phase 5-F: example of a tool that requires user
+    /// consent. The LLM has to ask the user before running
+    /// arbitrary shell commands. We ship this as a builtin
+    /// (disabled by default — the user has to enable it in
+    /// Settings) so the consent dialog can be exercised
+    /// during testing without writing a custom tool.
+    public static func runShell() -> LLMTool {
+        return LLMTool(
+            name: "run_shell",
+            description: "Run a shell command via /bin/sh -c. Useful for one-off CLI invocations like `ls /tmp` or `date`. Returns stdout, stderr, and exit code.",
+            parametersDescription: """
+            - command (string, required): the full shell command, e.g. "ls -la /tmp | head -5"
+            - timeout (int, optional): max seconds to wait (default: 10, max: 60)
+            """,
+            requiresConsent: true
+        ) { args in
+            guard let command = args["command"] as? String, !command.isEmpty else {
+                throw ToolError.badArgs("run_shell requires non-empty 'command'")
+            }
+            let timeout = min((args["timeout"] as? Int) ?? 10, 60)
+            let result = try await ProcessRunner.run(
+                executable: "/bin/sh",
+                arguments: ["-c", command]
+            )
+            // 124 is timeout's exit code; we surface a friendlier message.
+            if Int(result.exitCode) == 124 {
+                return LLMToolResult(
+                    summary: "Command timed out after \(timeout)s",
+                    payload: [
+                        "stdout": .string(result.stdout),
+                        "stderr": .string(result.stderr),
+                        "exitCode": .int(Int(result.exitCode)),
+                    ]
+                )
+            }
+            return LLMToolResult(
+                summary: "Exit \(result.exitCode): \(result.stdout.prefix(80))",
+                payload: [
+                    "stdout": .string(result.stdout),
+                    "stderr": .string(result.stderr),
+                    "exitCode": .int(Int(result.exitCode)),
+                ]
+            )
+        }
+    }
 }
 
 /// Errors that tools can throw. The outer loop in
