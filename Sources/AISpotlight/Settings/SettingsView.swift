@@ -53,10 +53,45 @@ struct SettingsView: View {
 
             if store.activeProvider == "custom" {
                 Section("Custom provider settings") {
+                    // Phase 4.6: cloud-model preset picker. Most
+                    // OpenAI-compatible providers share the
+                    // same /v1/chat/completions endpoint as
+                    // OpenAI's own API, so the user just picks
+                    // a preset, fills in their API key, and
+                    // they're done. We don't lock the fields
+                    // after picking — power users can still
+                    // override the URL or model.
+                    Picker("Preset", selection: $store.selectedPreset) {
+                        ForEach(ProviderPreset.all) { p in
+                            Text(p.displayName).tag(p.id)
+                        }
+                    }
+                    .onChange(of: store.selectedPreset) { _, new in
+                        if let p = ProviderPreset.all.first(where: { $0.id == new }) {
+                            // Pre-fill the URL and model with
+                            // the preset's defaults, but only
+                            // if those fields are still at the
+                            // previous preset's values. This
+                            // way switching back and forth
+                            // between presets doesn't trash the
+                            // user's manual URL edits.
+                            store.applyPreset(p)
+                        }
+                    }
                     TextField("Base URL", text: $store.customBaseURL, prompt: Text("https://api.openai.com/v1"))
                     TextField("Model", text: $store.customModel, prompt: Text("gpt-4o-mini"))
                     SecureField("API key (leave blank for providers that don't require one)",
                                 text: $store.customAPIKey)
+                    HStack {
+                        Button("Test connection") {
+                            Task { await store.testCustomConnection() }
+                        }
+                        if store.testResult != .none {
+                            Text(store.testResult.message)
+                                .font(.caption)
+                                .foregroundStyle(testResultColor)
+                        }
+                    }
                 }
             }
 
@@ -190,6 +225,17 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+
+    /// Phase 4.6: map the Color-free TestResult to a
+    /// SwiftUI Color. Centralized here so the styling
+    /// lives in the view, not the model.
+    private var testResultColor: Color {
+        switch store.testResult.style {
+        case "success": return .green
+        case "failure": return .red
+        default: return .secondary
         }
     }
 }
