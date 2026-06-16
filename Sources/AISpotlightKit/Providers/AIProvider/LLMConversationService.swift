@@ -108,7 +108,7 @@ public final class LLMConversationService: @unchecked Sendable {
                               history: [HistoryEntry] = [],
                               context: LLMContext = .empty,
                               registry: LLMToolRegistry,
-                              maxToolTurns: Int = 3) async throws -> AskWithToolsResult {
+                              maxToolTurns: Int = 2) async throws -> AskWithToolsResult {
         var turns = history
         turns.append(HistoryEntry(role: .user, text: query))
         var toolCalls: [ExecutedToolCall] = []
@@ -202,12 +202,20 @@ public final class LLMConversationService: @unchecked Sendable {
         - Reply with EXACTLY one JSON object: {"tool": "<name>", "args": {<params>}}
         - Do NOT add any explanation, prose, or markdown before or after the JSON.
         - If you don't need a tool to answer, just write the answer in plain text.
-        - If a tool result is not useful, try a different tool, then fall back to your own knowledge.
+
+        CRITICAL — STOP AFTER 1 TOOL CALL:
+        - After you receive a tool result, FORM A FINAL ANSWER.
+        - Do NOT call another tool unless the user explicitly asked for more.
+        - Most user questions are satisfied with ONE search_files call.
+        - Once you have the data you need, write the answer in plain text and STOP.
+        - Calling tools in a loop is a bug. Avoid it.
 
         Example (do NOT output this prose — just the JSON block):
 
         User: find my chemistry notes about polyester
         Assistant: {"tool": "search_files", "args": {"query": "polyester", "kind": "content"}}
+
+        (User then receives the search result and the assistant writes the final answer in plain text.)
         """
         // Phase 4.3.4: if context files were provided, list
         // their paths in the system block too so the LLM

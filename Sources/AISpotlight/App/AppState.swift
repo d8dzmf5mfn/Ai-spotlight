@@ -328,7 +328,7 @@ final class AppState: ObservableObject {
                         history: historySnapshot,
                         context: context,
                         registry: toolRegistry,
-                        maxToolTurns: 3
+                        maxToolTurns: 2
                     )
                     if Task.isCancelled { return }
                     await MainActor.run {
