@@ -125,4 +125,61 @@ final class BuiltinToolsTests: XCTestCase {
         XCTAssertTrue(prompt.contains("JSON"))
         XCTAssertTrue(prompt.contains("tool"))
     }
+
+    /// Phase 5-H: read_file reads a known file's content.
+    func testReadFileReads() async throws {
+        // Create a temp file with known content.
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("aispotlight-readtest-\(UUID().uuidString).md")
+        try "Hello, AI Spotlight from read_file!".write(to: tmp, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let tool = BuiltinTools.readFile()
+        let result = try await tool.handler(["path": tmp.path as Any])
+        // Find the "content" payload key.
+        guard let contentVal = result.payload["content"] else {
+            XCTFail("read_file should return a content payload key")
+            return
+        }
+        guard case .string(let text) = contentVal else {
+            XCTFail("read_file should return a string content payload, got: \(contentVal)")
+            return
+        }
+        XCTAssertTrue(text.contains("Hello, AI Spotlight"))
+    }
+
+    func testReadFileMissingPathThrows() async {
+        let tool = BuiltinTools.readFile()
+        do {
+            _ = try await tool.handler([:])
+            XCTFail("expected badArgs")
+        } catch {
+            // expected
+        }
+    }
+
+    func testReadFileNonexistentThrows() async {
+        let tool = BuiltinTools.readFile()
+        do {
+            _ = try await tool.handler(["path": "/nonexistent/path/12345.md" as Any])
+            XCTFail("expected runtimeError")
+        } catch {
+            // expected
+        }
+    }
+
+    func testReadFileRequiresConsent() {
+        let tool = BuiltinTools.readFile()
+        XCTAssertTrue(tool.requiresConsent, "read_file should require consent")
+    }
+
+    func testClipboardGetRequiresNoConsent() {
+        let tool = BuiltinTools.clipboardGet()
+        XCTAssertFalse(tool.requiresConsent, "clipboard_get should NOT require consent")
+    }
+
+    func testClipboardSetRequiresConsent() {
+        let tool = BuiltinTools.clipboardSet()
+        XCTAssertTrue(tool.requiresConsent, "clipboard_set should require consent")
+    }
+
 }

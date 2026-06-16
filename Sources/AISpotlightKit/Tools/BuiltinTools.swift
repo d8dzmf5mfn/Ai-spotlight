@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(AppKit)
+import AppKit
+#endif
 
 /// Phase 4.3: built-in local tools the LLM can call. These
 /// all use macOS-provided commands (`mdfind`, `find`, `open`)
@@ -218,6 +221,109 @@ public enum BuiltinTools {
                     "stdout": .string(result.stdout),
                     "stderr": .string(result.stderr),
                     "exitCode": .int(Int(result.exitCode)),
+                ]
+            )
+        }
+    }
+
+    /// Phase 5-H: read the text contents of a file. The LLM
+    /// can ground its answer in the actual file content (vs.
+    /// guessing from the filename). Requires consent because
+    /// it can read private files (Keychain entries, ~/.ssh,
+    /// etc. — anything the user has access to).
+    public static func readFile() -> LLMTool {
+        return LLMTool(
+            name: "read_file",
+            description: "Read the text contents of a file on the user's Mac. Returns up to 16KB of content. Use this when the user asks a question that requires knowing what's inside a specific file (e.g. 'what does the function foo do in bar.swift').",
+            parametersDescription: """
+            - path (string, required): absolute path to the file
+            - max_bytes (int, optional): max bytes to read (default: 16384, max: 65536)
+            """,
+            requiresConsent: true
+        ) { args in
+            guard let path = args["path"] as? String, !path.isEmpty else {
+                throw ToolError.badArgs("read_file requires non-empty 'path'")
+            }
+            let url = URL(fileURLWithPath: path)
+            guard FileManager.default.fileExists(atPath: path) else {
+                throw ToolError.runtimeError("File does not exist: \(path)")
+            }
+            let maxBytes = min((args["max_bytes"] as? Int) ?? 16384, 65536)
+            let handle: FileHandle
+            do {
+                handle = try FileHandle(forReadingFrom: url)
+            } catch {
+                throw ToolError.runtimeError("Cannot open file: \(error.localizedDescription)")
+            }
+            defer { try? handle.close() }
+            let data: Data
+            if #available(macOS 10.15.4, *) {
+                data = (try? handle.read(upToCount: maxBytes)) ?? Data()
+            } else {
+                data = handle.readData(ofLength: maxBytes)
+            }
+            let text = String(data: data, encoding: .utf8) ?? "(binary file, \(data.count) bytes, no UTF-8 text)"
+            let truncated = data.count >= maxBytes
+            var summary = "Read \(data.count) bytes from \(path)"
+            if truncated { summary += " (truncated)" }
+            return LLMToolResult(
+                summary: summary,
+                payload: [
+                    "path": .string(path),
+                    "content": .string(text),
+                    "bytes_read": .int(data.count),
+                    "truncated": .bool(truncated),
+                ]
+            )
+        }
+    }
+
+    /// Phase 5-H: read the current contents of the system
+    /// clipboard. Doesn't require consent — it's a read of
+    /// in-memory data the user has already chosen to put on
+    /// the clipboard.
+    public static func clipboardGet() -> LLMTool {
+        return LLMTool(
+            name: "clipboard_get",
+            description: "Read the current text contents of the system clipboard. Useful when the user says 'summarize what I copied' or 'fix the typo in my clipboard'.",
+            parametersDescription: "(no parameters)",
+            requiresConsent: false
+        ) { _ in
+            let pb = NSPasteboard.general
+            let text = pb.string(forType: .string) ?? ""
+            return LLMToolResult(
+                summary: text.isEmpty ? "Clipboard is empty" : "Read \(text.count) chars from clipboard",
+                payload: [
+                    "content": .string(text),
+                    "length": .int(text.count),
+                ]
+            )
+        }
+    }
+
+    /// Phase 5-H: write text to the system clipboard.
+    /// Requires consent because overwriting the user's
+    /// clipboard is a side effect — they may have important
+    /// content there.
+    public static func clipboardSet() -> LLMTool {
+        return LLMTool(
+            name: "clipboard_set",
+            description: "Write text to the system clipboard, replacing its current contents. Use this when the LLM has produced a useful string the user wants to paste (URL, code snippet, generated content, etc.).",
+            parametersDescription: """
+            - content (string, required): the text to put on the clipboard
+            """,
+            requiresConsent: true
+        ) { args in
+            guard let content = args["content"] as? String else {
+                throw ToolError.badArgs("clipboard_set requires 'content'")
+            }
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(content, forType: .string)
+            return LLMToolResult(
+                summary: "Wrote \(content.count) chars to clipboard",
+                payload: [
+                    "length": .int(content.count),
                 ]
             )
         }

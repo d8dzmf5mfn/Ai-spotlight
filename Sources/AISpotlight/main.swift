@@ -174,12 +174,18 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
         // In a future commit we'll add a Settings toggle to
         // disable this; for now it's always available.
         let shellTool = BuiltinTools.runShell()
+        let readTool = BuiltinTools.readFile()
+        let clipGetTool = BuiltinTools.clipboardGet()
+        let clipSetTool = BuiltinTools.clipboardSet()
         let sema = DispatchSemaphore(value: 0)
         Task.detached(priority: .userInitiated) {
             await toolRegistry.register(searchTool)
             await toolRegistry.register(openTool)
             await toolRegistry.register(appsTool)
             await toolRegistry.register(shellTool)
+            await toolRegistry.register(readTool)
+            await toolRegistry.register(clipGetTool)
+            await toolRegistry.register(clipSetTool)
             sema.signal()
         }
         // .now() returns immediately if already signalled;
