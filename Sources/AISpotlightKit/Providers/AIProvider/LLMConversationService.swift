@@ -89,6 +89,131 @@ public final class LLMConversationService: @unchecked Sendable {
         return provider.askStreaming(query: prompt, context: context)
     }
 
+    // MARK: - Tool calling (Phase 4.3.1)
+
+    /// Ask the LLM with tool access. The loop is:
+    ///   1. Inject the tool list into the system prompt.
+    ///   2. Call the LLM.
+    ///   3. If the LLM reply contains a tool call JSON block,
+    ///      execute the tool and feed the result back to the
+    ///      LLM as a "User" turn. Repeat up to `maxToolTurns`.
+    ///   4. If the LLM replies with plain text (no tool call),
+    ///      return that as the final answer.
+    ///
+    /// **Why 3 turns max**: a small local model (gemma2:2b at
+    /// 2K context) gets confused after 2-3 tool-use rounds. We
+    /// cap at 3 to keep the prompt short and the user from
+    /// waiting too long.
+    public func askWithTools(query: String,
+                              history: [HistoryEntry] = [],
+                              context: LLMContext = .empty,
+                              registry: LLMToolRegistry,
+                              maxToolTurns: Int = 3) async throws -> AskWithToolsResult {
+        var turns = history
+        turns.append(HistoryEntry(role: .user, text: query))
+        var toolCalls: [ExecutedToolCall] = []
+        let userQuestion = query
+        for _ in 0..<maxToolTurns {
+            let prompt = await buildToolPrompt(turns: turns, context: context, registry: registry)
+            let reply = try await provider.ask(query: prompt, context: context)
+            turns.append(HistoryEntry(role: .assistant, text: reply))
+            // Look for a tool call.
+            guard let call = ToolCallParser.parse(reply),
+                  let tool = await registry.get(call.tool) else {
+                // Plain text answer. Done.
+                return AskWithToolsResult(
+                    finalAnswer: reply,
+                    toolCalls: toolCalls,
+                    originalQuestion: userQuestion
+                )
+            }
+            // Execute the tool.
+            do {
+                let result = try await tool.handler(call.args)
+                let recorded = ExecutedToolCall(
+                    tool: call.tool,
+                    args: call.args,
+                    summary: result.summary
+                )
+                toolCalls.append(recorded)
+                // Feed the result back as a User turn so the
+                // LLM can incorporate it. We include both the
+                // summary (one line, easy to scan) and the JSON
+                // payload (structured, parseable).
+                let payload = encodeResultAsJSON(result.payload)
+                let feedback = "Tool [\(call.tool)] returned: \(result.summary)\nResult: \(payload)"
+                turns.append(HistoryEntry(role: .user, text: feedback))
+            } catch {
+                // Tool threw. Tell the LLM so it can try a
+                // different argument or give up.
+                let errMsg = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+                let feedback = "Tool [\(call.tool)] failed: \(errMsg)"
+                turns.append(HistoryEntry(role: .user, text: feedback))
+                toolCalls.append(ExecutedToolCall(
+                    tool: call.tool,
+                    args: call.args,
+                    summary: "FAILED: \(errMsg)"
+                ))
+            }
+        }
+        // Hit maxToolTurns without a final text answer.
+        // Return the last assistant turn as the answer and
+        // mark it as truncated.
+        let last = turns.last(where: { $0.role == .assistant })?.text ?? ""
+        return AskWithToolsResult(
+            finalAnswer: last + "\n\n[Reached tool-call limit]",
+            toolCalls: toolCalls,
+            originalQuestion: userQuestion
+        )
+    }
+
+    /// Build a prompt that includes the prior conversation, the
+    /// context files, the new question, AND the tool schema.
+    /// The tool schema is rendered as plain text because small
+    /// local models handle text better than JSON Schema strings.
+    private func buildToolPrompt(turns: [HistoryEntry],
+                                  context: LLMContext,
+                                  registry: LLMToolRegistry) async -> String {
+        let toolsPrompt = await registry.toolsForPrompt()
+        var out = ""
+        if !toolsPrompt.isEmpty {
+            out += toolsPrompt + "\n\n"
+        }
+        let history = Array(turns.dropLast())  // all but the latest user message
+        if !history.isEmpty {
+            out += "Previous conversation:\n"
+            for entry in history.suffix(6) {
+                let role = entry.role == .user ? "User" : "Assistant"
+                out += "\n\(role): \(entry.text)\n"
+            }
+            out += "\n"
+        }
+        if !context.urls.isEmpty {
+            out += "Context files:\n"
+            for (i, url) in context.urls.enumerated() {
+                let snippet = readSnippet(url: url)
+                out += "\n[File \(i + 1): \(url.path)]\n\(snippet)\n[/File \(i + 1)]\n"
+            }
+            out += "\n"
+        }
+        if let lastUser = turns.last(where: { $0.role == .user })?.text {
+            out += "Question: \(lastUser)\n"
+        }
+        return out
+    }
+
+    /// Encode an LLMToolValue payload as a JSON string for
+    /// the LLM's next prompt. We use the `description` field
+    /// of the enum's cases (since LLMToolValue has a custom
+    /// encode) but it's simpler to round-trip via JSONEncoder.
+    private func encodeResultAsJSON(_ payload: [String: LLMToolValue]) -> String {
+        guard let data = try? JSONEncoder().encode(payload),
+              let s = String(data: data, encoding: .utf8) else {
+            return "{...}"
+        }
+        return s
+    }
+
     /// Build a prompt that includes the prior conversation, the
     /// context files, and the new question. The history is
     /// capped to the most recent 6 turns so we don't exceed the
@@ -157,3 +282,39 @@ public final class LLMConversationService: @unchecked Sendable {
         return "(file is not UTF-8 text; \(data.count) bytes)"
     }
 }
+
+    // MARK: - Tool calling result types
+
+    /// The result of an `askWithTools` call. Includes the
+    /// final answer (plain text from the LLM) AND the list
+    /// of tool calls the LLM made along the way. The
+    /// AppState can display this in the UI as a transcript.
+    public struct AskWithToolsResult: Sendable {
+        public let finalAnswer: String
+        public let toolCalls: [ExecutedToolCall]
+        public let originalQuestion: String
+
+        public init(finalAnswer: String,
+                    toolCalls: [ExecutedToolCall],
+                    originalQuestion: String) {
+            self.finalAnswer = finalAnswer
+            self.toolCalls = toolCalls
+            self.originalQuestion = originalQuestion
+        }
+    }
+
+    /// One tool call the LLM made during the ask. The
+    /// AppState shows these in the UI as "Used search_files:
+    /// Found 5 files matching 'polyester'" so the user knows
+    /// what the AI did.
+    public struct ExecutedToolCall: Sendable {
+        public let tool: String
+        public let args: [String: Any]
+        public let summary: String
+
+        public init(tool: String, args: [String: Any], summary: String) {
+            self.tool = tool
+            self.args = args
+            self.summary = summary
+        }
+    }
