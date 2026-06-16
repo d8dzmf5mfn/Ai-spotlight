@@ -60,7 +60,7 @@ public enum BuiltinTools {
 
             let result = try await ProcessRunner.run(
                 executable: "/usr/bin/mdfind",
-                arguments: ["-maxresults", "\(clampedLimit)", mdquery]
+                arguments: [mdquery]
             )
             if result.exitCode != 0 {
                 throw ToolError.runtimeError(
@@ -71,11 +71,14 @@ public enum BuiltinTools {
                 .split(separator: "\n")
                 .map { String($0) }
                 .filter { !$0.isEmpty }
+            // mdfind doesn't support -maxresults on modern macOS.
+            // We cap the output client-side.
+            let capped = Array(paths.prefix(clampedLimit))
             return LLMToolResult(
-                summary: "Found \(paths.count) file(s) matching '\(query)'",
+                summary: "Found \(capped.count) file(s) matching '\(query)'",
                 payload: [
-                    "paths": .array(paths.map { .string($0) }),
-                    "count": .int(paths.count),
+                    "paths": .array(capped.map { .string($0) }),
+                    "count": .int(capped.count),
                 ]
             )
         }
