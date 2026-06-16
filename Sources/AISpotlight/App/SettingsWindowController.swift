@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import AISpotlightKit
 
 /// Owns the Settings window. Listens for `.aispotlightOpenSettings` and
 /// brings up (or creates) a non-activating panel hosting `SettingsView`.
@@ -42,6 +43,7 @@ final class SettingsWindowController: NSObject {
     }
 
     @objc func show() {
+        Log.write("[SettingsWindowController] show() called (notification received)")
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
     }
