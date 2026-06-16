@@ -141,16 +141,11 @@ struct SettingsView: View {
                     modelField
                     SecureField("API key (leave blank for providers that don't require one)",
                                 text: $store.customAPIKey)
-                    HStack {
-                        Button("Test connection") {
-                            Task { await store.testCustomConnection() }
-                        }
-                        if store.testResult != .none {
-                            Text(store.testResult.message)
-                                .font(.caption)
-                                .foregroundStyle(testResultColor)
-                        }
-                    }
+                    // Phase 5-C: 4-step diagnostic replaces the
+                    // single-line testResult UI. Each row shows
+                    // ✓ / ⏳ / ✗ with a precise error message
+                    // for the corresponding step.
+                    diagnosticView
                 }
             }
 
@@ -305,6 +300,84 @@ struct SettingsView: View {
         case "success": return .green
         case "failure": return .red
         default: return .secondary
+        }
+    }
+
+    /// Phase 5-C: the 4-row connection diagnostic view.
+    /// Renders one row per step (URL, Auth, Model,
+    /// Inference), each with ✓ / ⏳ / ✗ + the step's
+    /// verdict message. A "Run full diagnostic" button
+    /// triggers `store.runDiagnostic()`.
+    @ViewBuilder
+    private var diagnosticView: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                Task { await store.runDiagnostic() }
+            } label: {
+                HStack {
+                    if store.isRunningDiagnostic {
+                        ProgressView().scaleEffect(0.5).frame(width: 14, height: 14)
+                    } else {
+                        Image(systemName: "stethoscope")
+                    }
+                    Text(store.isRunningDiagnostic ? "Running diagnostic…" : "Run full diagnostic")
+                }
+            }
+            .disabled(store.isRunningDiagnostic)
+            // Show the 4 rows. We always show them once
+            // diagnostic has been run at least once; before
+            // that they're hidden so the Settings page
+            // doesn't grow when the user hasn't done anything.
+            ForEach(ConnectionDiagnosticService.Step.allCases, id: \.self) { step in
+                if let verdict = store.diagnosticVerdicts[step] {
+                    diagnosticRow(step: step, verdict: verdict)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func diagnosticRow(
+        step: ConnectionDiagnosticService.Step,
+        verdict: ConnectionDiagnosticService.Verdict
+    ) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(verdictIcon(verdict))
+                .frame(width: 16)
+                .font(.body.monospaced())
+            VStack(alignment: .leading, spacing: 1) {
+                Text(step.rawValue)
+                    .font(.caption.bold())
+                Text(verdictDetail(verdict))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func verdictIcon(_ v: ConnectionDiagnosticService.Verdict) -> String {
+        switch v {
+        case .pending: return "○"
+        case .running: return "⏳"
+        case .passed: return "✓"
+        case .failed: return "✗"
+        }
+    }
+
+    private func verdictDetail(_ v: ConnectionDiagnosticService.Verdict) -> String {
+        switch v {
+        case .pending: return "Waiting…"
+        case .running: return "Running…"
+        case .passed(let msg): return msg
+        case .failed(let msg): return msg
+        }
+    }
+
+    private func verdictColor(_ v: ConnectionDiagnosticService.Verdict) -> Color {
+        switch v {
+        case .passed: return .green
+        case .failed: return .red
+        case .running, .pending: return .secondary
         }
     }
 

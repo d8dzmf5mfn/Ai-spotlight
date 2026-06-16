@@ -148,8 +148,18 @@ final class SettingsStore: ObservableObject {
     /// in the discovered list. The Picker shows a
     /// "Type manually..." row that toggles this.
     @Published var useManualModel: Bool = false
-    /// Live status of the "Test connection" button in
-    /// SettingsView. UI shows this next to the button.
+    /// Phase 5-C: per-step diagnostic verdicts. The UI
+    /// renders 4 rows (URL reachable, API key valid,
+    /// Model exists, Inference works), each with ✓ / ⏳ / ✗
+    /// + a specific message. This replaces the previous
+    /// single-line testResult.
+    @Published var diagnosticVerdicts: [ConnectionDiagnosticService.Step: ConnectionDiagnosticService.Verdict] = [:]
+    @Published var isRunningDiagnostic: Bool = false
+    /// True while a single-line "test connection" is in
+    /// flight (kept for back-compat with the old testResult
+    /// UI on the Ollama section, where the simpler 1-line
+    /// status was less confusing). Will be removed in commit
+    /// D when the Ollama section also adopts the 4-row UI.
     @Published var testResult: TestResult = .none
     public enum TestResult: Equatable, Sendable {
         case none
@@ -404,5 +414,42 @@ final class SettingsStore: ObservableObject {
         } catch {
             testResult = .failure("Error: \(error.localizedDescription)")
         }
+    }
+
+    /// Phase 5-C: run the 4-step connection diagnostic.
+    /// Replaces the single-line testCustomConnection for
+    /// cloud providers. The UI now shows 4 rows (URL,
+    /// Auth, Model, Inference), each with a precise error
+    /// message so the user can tell at a glance which of
+    /// the 4 layers failed.
+    func runDiagnostic() async {
+        guard let descriptor = await ProviderRegistry.shared.descriptor(for: selectedPreset) else {
+            diagnosticVerdicts = [:]
+            return
+        }
+        let baseURL = customBaseURL.isEmpty ? descriptor.defaultBaseURL : customBaseURL
+        // Reset all 4 steps to .pending so the UI shows ⏳
+        // for each, then immediately to .running for step 1.
+        // The actor updates each step as it completes.
+        diagnosticVerdicts = Dictionary(
+            uniqueKeysWithValues: ConnectionDiagnosticService.Step.allCases.map { ($0, .pending) }
+        )
+        isRunningDiagnostic = true
+        defer { isRunningDiagnostic = false }
+        let service = ConnectionDiagnosticService()
+        // We want progressive UI updates. The actor returns
+        // the final dictionary at the end (because it
+        // short-circuits on first failure), but we want
+        // each step to flip from ⏳ to ✓/✗ as it completes.
+        // Easiest path: run each step in a wrapper that
+        // publishes to the store. For now we just publish
+        // at the end (Phase 5-D will add streaming).
+        let results = await service.diagnose(
+            descriptor: descriptor,
+            baseURL: baseURL,
+            apiKey: customAPIKey,
+            model: customModel
+        )
+        diagnosticVerdicts = results
     }
 }
