@@ -58,6 +58,16 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
         // to UserDefaults; we read the resolved config back from settings.
         let aiConfig = settings.resolveConfig()
         let ai = AIFactory.makeProvider(from: aiConfig)
+        // Phase 5-F: wire the live provider into the SettingsStore
+        // so the Settings UI can push config updates without
+        // restarting the app. Without this, the provider's
+        // config.model is frozen at launch-time — the user
+        // can change customModel in Settings but the running
+        // provider keeps the old value, which is what caused
+        // the "Test connection green but ask 401" bug.
+        if let openaiProvider = ai as? OpenAICompatibleProvider {
+            settings.liveProvider = openaiProvider
+        }
 
         // Phase 4.2.5: disable the LLMIntentRouter by default.
         // Every keystroke past the 0.6s debounce was firing a

@@ -26,12 +26,53 @@ final class SettingsStore: ObservableObject {
         didSet { defaults.set(activeProvider, forKey: Self.kProvider) }
     }
     @Published var customBaseURL: String {
-        didSet { defaults.set(customBaseURL, forKey: Self.kBaseURL) }
+        didSet {
+            defaults.set(customBaseURL, forKey: Self.kBaseURL)
+            pushConfigToProvider()
+        }
     }
     @Published var customModel: String {
-        didSet { defaults.set(customModel, forKey: Self.kModel) }
+        didSet {
+            defaults.set(customModel, forKey: Self.kModel)
+            pushConfigToProvider()
+        }
     }
-    @Published var customAPIKey: String = ""
+    @Published var customAPIKey: String = "" {
+        didSet {
+            pushConfigToProvider()
+        }
+    }
+
+    // MARK: Phase 5-F: live provider re-wiring
+    /// The currently-active provider. main.swift sets this
+    /// once at launch. SettingsStore pokes it via
+    /// `updateConfig` whenever customModel / customBaseURL /
+    /// customAPIKey change. This is the small fix for the
+    /// "SettingsStore ≠ runtime provider config" bug where
+    /// the running provider kept the launch-time model
+    /// (deepseek-v4-flash) even after the user changed
+    /// Settings.
+    ///
+    /// We type this as `OpenAICompatibleProvider?` rather
+    /// than `AIProvider?` because only the OpenAI-compatible
+    /// path has the updateConfig method. Ollama goes through
+    /// the same provider type (it's also OpenAI-compatible
+    /// at /v1/chat/completions since 0.5.0), so the type
+    /// covers both. The custom URL path is the same type
+    /// too. This avoids introducing a protocol method
+    /// we'd then have to implement on every provider.
+    weak var liveProvider: OpenAICompatibleProvider?
+
+    /// Recompute the resolved config and push it to the
+    /// live provider, if one is registered. Called from
+    /// didSet handlers on customBaseURL, customModel,
+    /// and customAPIKey. Idempotent and cheap — it's a
+    /// struct copy + a property reassignment.
+    func pushConfigToProvider() {
+        guard let provider = liveProvider else { return }
+        guard let newConfig = resolveConfig() else { return }
+        provider.updateConfig(newConfig)
+    }
 
     // MARK: Phase 4.6 cloud-model preset
     /// The currently-selected preset. The Picker in

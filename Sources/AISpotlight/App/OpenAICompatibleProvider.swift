@@ -11,7 +11,16 @@ import AISpotlightKit
 /// effectively a typed wrapper around `URLSession`.
 public final class OpenAICompatibleProvider: AIProvider, @unchecked Sendable {
     public let name: String
-    public let config: AIConfig
+    /// Phase 5-F: the config is now a `var` (was `let`).
+    /// SettingsStore can update it live via `updateConfig`
+    /// so the running provider always reflects the user's
+    /// current Settings. The pre-5-F code captured the
+    /// config at launch and never updated it — if the user
+    /// changed customModel in Settings after launch, the
+    /// provider kept sending the old model name. This is
+    /// the "deepseek-v4-flash stays frozen while the user
+    /// changes it to deepseek-chat" bug.
+    public var config: AIConfig
     private let session: URLSession
     /// Reused across requests — `JSONEncoder` is expensive to construct
     /// and we encode the same shape (system+user prompt) every call.
@@ -25,6 +34,17 @@ public final class OpenAICompatibleProvider: AIProvider, @unchecked Sendable {
         self.name = config.displayName
         self.config = config
         self.session = session
+    }
+
+    /// Phase 5-F: live-update the config. SettingsStore
+    /// calls this from `customModel` and `customBaseURL`
+    /// and `customAPIKey` didSet handlers so the running
+    /// provider matches the user's current Settings.
+    /// The change is one-line: a single struct field
+    /// reassignment under the actor's serial executor.
+    public func updateConfig(_ newConfig: AIConfig) {
+        self.config = newConfig
+        Log.write("[OpenAICompatibleProvider] config updated: model=\(newConfig.model) baseURL=\(newConfig.baseURL.absoluteString)")
     }
 
     // MARK: - classify (Phase 1)
