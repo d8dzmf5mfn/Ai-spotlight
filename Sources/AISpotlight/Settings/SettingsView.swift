@@ -75,6 +75,33 @@ struct SettingsView: View {
             Section("Hotkey") {
                 KeyboardShortcuts.Recorder("Toggle AI Spotlight:",
                                           name: HotkeyService.togglePanelName)
+                // Phase 4.3.3: the hotkey requires Accessibility
+                // permission. Without it, ⌘+Space won't reach
+                // our app — macOS Spotlight will steal it (or
+                // nothing happens). Show a button to open
+                // System Settings so the user can grant
+                // permission in one click.
+                if !AXIsProcessTrusted() {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Accessibility permission required")
+                                .font(.callout.bold())
+                            Text("Click the button below to open System Settings → Privacy & Security → Accessibility, then toggle AI Spotlight on. The hotkey won't work until you do.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Button("Open System Settings") {
+                                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                                    NSWorkspace.shared.open(url)
+                                }
+                            }
+                            .controlSize(.small)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
                 Text("Default: ⌘+Space. If ⌘+Space also opens macOS Spotlight, " +
                      "disable it in System Settings → Keyboard → Keyboard Shortcuts " +
                      "→ Spotlight → uncheck \"Show Spotlight search\".")
