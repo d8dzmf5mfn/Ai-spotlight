@@ -176,6 +176,49 @@ private struct LLMReplyView: View {
                     // LLM produces tokens. ScrollViewReader lets us
                     // auto-scroll to the bottom so the user always
                     // sees the latest text.
+                    // Phase 4.4: file paths the LLM mentioned
+                    // in its reply (e.g. "/Users/me/foo.md").
+                    // Show each as a clickable button so the
+                    // user can open it without copy-paste or
+                    // navigating the file system.
+                    if !state.llmReplyPaths.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Files mentioned:")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            ForEach(Array(state.llmReplyPaths.enumerated()), id: \.offset) { _, url in
+                                Button {
+                                    state.openLLMReplyPath(url)
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "doc.text")
+                                            .font(.caption)
+                                        Text(url.lastPathComponent)
+                                            .font(.caption)
+                                            .lineLimit(1)
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .help(url.path)
+                            }
+                        }
+                        .padding(.top, 4)
+                    }
+                    // Phase 4.4: when a tool is running, show
+                    // a "🔧 using X..." indicator above the
+                    // (currently empty) reply. The LLM reply
+                    // text appears below once the loop
+                    // completes.
+                    if let tool = state.currentToolName {
+                        HStack(spacing: 4) {
+                            ProgressView().scaleEffect(0.5).frame(width: 12, height: 12)
+                            Text("🔧 using \(tool)…")
+                                .font(.caption)
+                                .foregroundStyle(.purple)
+                        }
+                        .padding(.bottom, 4)
+                    }
                     Text(reply)
                         .font(.callout.monospaced())
                         .textSelection(.enabled)

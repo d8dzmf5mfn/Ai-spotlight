@@ -108,7 +108,8 @@ public final class LLMConversationService: @unchecked Sendable {
                               history: [HistoryEntry] = [],
                               context: LLMContext = .empty,
                               registry: LLMToolRegistry,
-                              maxToolTurns: Int = 2) async throws -> AskWithToolsResult {
+                              maxToolTurns: Int = 2,
+                              onToolStart: (@Sendable (String) async -> Void)? = nil) async throws -> AskWithToolsResult {
         var turns = history
         turns.append(HistoryEntry(role: .user, text: query))
         var toolCalls: [ExecutedToolCall] = []
@@ -134,6 +135,12 @@ public final class LLMConversationService: @unchecked Sendable {
                     toolCalls: toolCalls,
                     originalQuestion: userQuestion
                 )
+            }
+            // Phase 4.4: notify caller about to start a tool.
+            // The AppState uses this to show "🔧 using
+            // search_files..." progress while the tool runs.
+            if let cb = onToolStart {
+                await cb(call.tool)
             }
             // Execute the tool.
             do {

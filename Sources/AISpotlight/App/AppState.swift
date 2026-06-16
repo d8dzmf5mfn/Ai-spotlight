@@ -99,6 +99,20 @@ final class AppState: ObservableObject {
     /// above the LLM reply so the user knows what the AI did.
     @Published var toolTrace: [String] = []
 
+    /// Phase 4.4: file paths the LLM mentioned in its reply
+    /// (e.g. "/Users/me/notes/polyester.md"). When the LLM
+    /// answers "I found the file at /path/to/x.md", we extract
+    /// the path and surface it as a clickable SearchResult so
+    /// the user can press Enter to open it — no copy-paste
+    /// and no "go find the file yourself" flow.
+    @Published var llmReplyPaths: [URL] = []
+
+    /// Phase 4.4: name of the tool currently running, if any.
+    /// Set by runLLMAsk before the tool handler runs, cleared
+    /// after. UI uses this to show "🔧 using search_files..."
+    /// progress while the tool is in flight.
+    @Published var currentToolName: String? = nil
+
     /// Phase 4.3.2: the tool registry the LLM can call. Wired
     /// in from main.swift. Set to `nil` to disable tool use.
     private let toolRegistry: LLMToolRegistry
@@ -311,6 +325,8 @@ final class AppState: ObservableObject {
         llmReply = ""
         llmError = nil
         toolTrace = []
+        llmReplyPaths = []
+        currentToolName = nil
 
         // Phase 4.3.2: when useTools is true, take the tool
         // path. We optimistically dispatch to askWithTools
@@ -329,7 +345,16 @@ final class AppState: ObservableObject {
                         context: context,
                         registry: toolRegistry,
                         maxToolTurns: 2
-                    )
+                    ) { toolName in
+                        // Phase 4.4: set the current tool name
+                        // so the UI can show a "🔧 using X..."
+                        // progress indicator. Cleared when the
+                        // loop returns (or the catch block fires).
+                        await MainActor.run {
+                            guard let self, self.llmGeneration == currentGeneration else { return }
+                            self.currentToolName = toolName
+                        }
+                    }
                     if Task.isCancelled { return }
                     await MainActor.run {
                         guard let self, self.llmGeneration == currentGeneration else { return }
@@ -337,6 +362,11 @@ final class AppState: ObservableObject {
                             "🔧 \(call.tool): \(call.summary)"
                         }
                         self.llmReply = result.finalAnswer
+                        // Phase 4.4: extract any file paths the LLM
+                        // mentioned in its reply, so the user can
+                        // press Enter to open them.
+                        self.llmReplyPaths = Self.extractPaths(from: result.finalAnswer)
+                        self.currentToolName = nil
                         self.isLLMBusy = false
                         self.llmHistory.append(.init(role: .user, text: query))
                         self.llmHistory.append(.init(role: .assistant, text: result.finalAnswer))
@@ -350,6 +380,7 @@ final class AppState: ObservableObject {
                     let errMsg = classified.message
                     await MainActor.run {
                         guard let self, self.llmGeneration == currentGeneration else { return }
+                        self.currentToolName = nil
                         if Self.isURLCancelled(error) {
                             self.isLLMBusy = false
                         } else {
@@ -654,6 +685,42 @@ final class AppState: ObservableObject {
         for w in NSApp.windows where w is SpotlightPanel {
             w.orderOut(nil)
         }
+    }
+
+    /// Phase 4.4: scan an LLM reply for absolute file paths.
+    /// The LLM often writes things like "see /Users/me/foo.md
+    /// for the chemistry notes" — we want the user to be
+    /// able to open that file with one click. The regex is
+    /// deliberately permissive: it matches /Users/... or
+    /// /private/var/... or /tmp/... paths. We filter by
+    /// fileExists so prose like "/usr/bin/foo" (just text,
+    /// not a real file) is dropped.
+    static func extractPaths(from text: String) -> [URL] {
+        let pattern = #"(/[A-Za-z0-9_./-]{2,200}?[A-Za-z0-9_-])(?=[\s,;)\]>]|$)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return []
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        let matches = regex.matches(in: text, range: range)
+        var paths: [URL] = []
+        var seen: Set<String> = []
+        for match in matches {
+            guard let r = Range(match.range(at: 1), in: text) else { continue }
+            let s = String(text[r])
+            if seen.contains(s) { continue }
+            guard FileManager.default.fileExists(atPath: s) else { continue }
+            seen.insert(s)
+            paths.append(URL(fileURLWithPath: s))
+            if paths.count >= 8 { break }
+        }
+        return paths
+    }
+
+    /// Phase 4.4: user-initiated open of a file path the
+    /// LLM mentioned. We use NSWorkspace directly so the
+    /// panel's current results list isn't disturbed.
+    func openLLMReplyPath(_ url: URL) {
+        NSWorkspace.shared.open(url)
     }
 }
 
