@@ -28,7 +28,7 @@ public enum BuiltinTools {
     public static func searchFiles() -> LLMTool {
         return LLMTool(
             name: "search_files",
-            description: "Search for files on the user's Mac by content or filename. Uses macOS Spotlight so it returns files already indexed by the OS.",
+            description: "Find files on the user's Mac by filename or by file contents. Returns paths.",
             parametersDescription: """
             - query (string, required): the search terms (e.g. "polyester", "report.pdf", "chemistry notes")
             - kind (string, optional): "name" to search filenames only, "content" to search file contents (default: "content")
