@@ -3,7 +3,12 @@ import KeyboardShortcuts
 import AISpotlightKit
 
 struct SettingsView: View {
-    @StateObject private var store = SettingsStore()
+    /// Phase 5-F: the SAME SettingsStore instance that
+    /// main.swift created and wired the liveProvider to.
+    /// NOT a fresh @StateObject — a fresh instance would
+    /// have liveProvider = nil and pushConfigToProvider
+    /// would silently do nothing.
+    @ObservedObject var store: SettingsStore
     @StateObject private var discovery = LocalModelDiscoveryState()
 
     var body: some View {

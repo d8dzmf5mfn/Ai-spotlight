@@ -236,7 +236,13 @@ let orchestrator = SearchOrchestrator(providers: [
         // entry. Held as a strong reference in `self.settingsWindow` —
         // otherwise the NotificationCenter observer would be deallocated
         // and `.aispotlightOpenSettings` would silently do nothing.
-        settingsWindow = SettingsWindowController()
+        // Phase 5-F: pass the SAME SettingsStore instance so
+        // SettingsView has the liveProvider wired. Without
+        // this, SettingsView creates its own fresh store via
+        // @StateObject, liveProvider=nil, pushConfigToProvider
+        // silently does nothing, and the running provider keeps
+        // the old config ("Test green but chat 401").
+        settingsWindow = SettingsWindowController(store: settings)
         Log.write("settings window controller installed")
 
         // Global hotkey (⌘+Space by default, user-rebindable in Settings).

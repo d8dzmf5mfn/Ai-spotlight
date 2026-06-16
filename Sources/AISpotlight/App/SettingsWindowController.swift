@@ -10,22 +10,21 @@ import SwiftUI
 /// open our own window from the menu bar menu instead.
 final class SettingsWindowController: NSObject {
     private var window: NSWindow!
+    /// Phase 5-F: the SAME SettingsStore instance that main.swift
+    /// created and wired the liveProvider to. Without this,
+    /// SettingsView creates its own fresh SettingsStore via
+    /// @StateObject, which has liveProvider = nil, and
+    /// pushConfigToProvider silently does nothing — the
+    /// running provider keeps the old config (hence "Test
+    /// green but chat 401").
+    private let store: SettingsStore
 
-    override init() {
+    init(store: SettingsStore) {
+        self.store = store
         super.init()
-        let view = SettingsView()
+        let view = SettingsView(store: store)
         let host = NSHostingController(rootView: view)
         let style: NSWindow.StyleMask = [.titled, .closable, .miniaturizable]
-        // Phase 4.6.2: the NSWindow was hardcoded to 480x460
-        // and the SwiftUI frame modifier was being ignored
-        // because the window content size is set here. We
-        // now use 600x500 as the initial content size and
-        // set `minSize` so the user can resize up. The
-        // SwiftUI body still has the ideal/min frame
-        // hints but those act as suggestions when the
-        // host controller reports a content size; the
-        // NSWindow's contentRect is what actually drives
-        // the rendered window.
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 500),
                           styleMask: style,
                           backing: .buffered, defer: false)
