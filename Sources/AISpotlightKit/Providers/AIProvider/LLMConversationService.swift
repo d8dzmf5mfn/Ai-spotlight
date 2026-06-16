@@ -123,8 +123,18 @@ public final class LLMConversationService: @unchecked Sendable {
             // "<<TOOL_SYSTEM>>" prefix and routes the
             // before-newline content as a system message.
             let systemBlock = await buildToolSystemBlock(registry: registry, context: context)
+            // Phase 5-G: thread memory context into the system
+            // block. The memory store is an actor but its
+            // read path is nonisolated (read-only, just
+            // UserDefaults), so we don't need an actor hop.
+            // For a fresh install the block is empty and
+            // we skip the append entirely.
+            let memoryBlock = MemoryStore.shared.contextBlockSync()
+            let augmentedSystem = memoryBlock.isEmpty
+                ? systemBlock
+                : systemBlock + "\n\n" + memoryBlock
             let userBlock = buildUserBlock(turns: turns)
-            let prompt = "<<TOOL_SYSTEM>>\n" + systemBlock + "\n<<END_SYSTEM>>\n\n" + userBlock
+            let prompt = "<<TOOL_SYSTEM>>\n" + augmentedSystem + "\n<<END_SYSTEM>>\n\n" + userBlock
             let reply = try await provider.ask(query: prompt, context: context)
             turns.append(HistoryEntry(role: .assistant, text: reply))
             // Look for a tool call.

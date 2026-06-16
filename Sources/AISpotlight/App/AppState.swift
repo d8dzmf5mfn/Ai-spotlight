@@ -274,6 +274,12 @@ final class AppState: ObservableObject {
             llmReply = nil; llmError = nil
             lastSearchContextURLs = []
         }
+        // Phase 5-G: record the search so the LLM can
+        // answer "I searched for X yesterday, find again"
+        // without the user repeating themselves. We record
+        // every non-empty query, including ones the rule
+        // parser classified as .unknown.
+        await MemoryStore.shared.recordSearch(q)
         Log.write("[AppState] runSearch done for q=\(q.prefix(60)), will NOT auto-ask, results=\(r.count)")
     }
 
@@ -652,6 +658,17 @@ final class AppState: ObservableObject {
             // LLM reply from the user — they'd see the file
             // open (good) but the LLM reply would stream into a
             // panel that's no longer visible.
+            // Phase 5-G: record the open so the LLM can answer
+            // follow-up questions like "summarize the file I
+            // just opened" or "open the app I just launched"
+            // without the user naming it.
+            await MemoryStore.shared.recordFileOpen(r.url)
+            if r.kind == .app {
+                // For apps, also record by name so the LLM
+                // can disambiguate "open my notes" by matching
+                // against the most-recently-launched app.
+                await MemoryStore.shared.recordAppLaunch(r.title)
+            }
             NSWorkspace.shared.open(r.url)
             if !isLLMBusy {
                 closePanel()
