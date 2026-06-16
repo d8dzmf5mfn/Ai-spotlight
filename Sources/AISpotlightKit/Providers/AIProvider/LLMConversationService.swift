@@ -114,7 +114,15 @@ public final class LLMConversationService: @unchecked Sendable {
         var toolCalls: [ExecutedToolCall] = []
         let userQuestion = query
         for _ in 0..<maxToolTurns {
-            let prompt = await buildToolPrompt(turns: turns, context: context, registry: registry)
+            // Phase 4.3.4: split tool schema into a real
+            // system role (per OpenAI function-calling
+            // guidance) and keep history + question in the
+            // user role. The provider detects the
+            // "<<TOOL_SYSTEM>>" prefix and routes the
+            // before-newline content as a system message.
+            let systemBlock = await buildToolSystemBlock(registry: registry, context: context)
+            let userBlock = buildUserBlock(turns: turns)
+            let prompt = "<<TOOL_SYSTEM>>\n" + systemBlock + "\n<<END_SYSTEM>>\n\n" + userBlock
             let reply = try await provider.ask(query: prompt, context: context)
             turns.append(HistoryEntry(role: .assistant, text: reply))
             // Look for a tool call.
@@ -171,15 +179,52 @@ public final class LLMConversationService: @unchecked Sendable {
     /// context files, the new question, AND the tool schema.
     /// The tool schema is rendered as plain text because small
     /// local models handle text better than JSON Schema strings.
-    private func buildToolPrompt(turns: [HistoryEntry],
-                                  context: LLMContext,
-                                  registry: LLMToolRegistry) async -> String {
+    /// Phase 4.3.4: build the system-role content for the
+    /// tool-aware ask. The provider splits this from the
+    /// user-role content via the "<<TOOL_SYSTEM>>" marker.
+    ///
+    /// We follow OpenAI's function-calling guidance: the
+    /// system role is where tool definitions and behavioral
+    /// rules belong. Small local models (gemma2:2b, qwen2.5:3b)
+    /// are much more likely to call tools when the schema
+    /// lives in the system role, with a few-shot example,
+    /// and with an explicit "ALWAYS reply with JSON" rule.
+    private func buildToolSystemBlock(registry: LLMToolRegistry,
+                                       context: LLMContext) async -> String {
         let toolsPrompt = await registry.toolsForPrompt()
-        var out = ""
+        var out = "You are AI Spotlight, a local macOS search and assistant tool.\n"
+        out += "You can call tools to find files, open apps, and answer questions grounded in the user's real data.\n"
         if !toolsPrompt.isEmpty {
-            out += toolsPrompt + "\n\n"
+            out += "\n" + toolsPrompt + "\n"
         }
-        let history = Array(turns.dropLast())  // all but the latest user message
+        out += """
+        \nHow to call a tool:
+        - Reply with EXACTLY one JSON object: {"tool": "<name>", "args": {<params>}}
+        - Do NOT add any explanation, prose, or markdown before or after the JSON.
+        - If you don't need a tool to answer, just write the answer in plain text.
+        - If a tool result is not useful, try a different tool, then fall back to your own knowledge.
+
+        Example (do NOT output this prose — just the JSON block):
+
+        User: find my chemistry notes about polyester
+        Assistant: {"tool": "search_files", "args": {"query": "polyester", "kind": "content"}}
+        """
+        // Phase 4.3.4: if context files were provided, list
+        // their paths in the system block too so the LLM
+        // knows the files exist. We DON'T inline contents
+        // here — that's done in the user block.
+        if !context.urls.isEmpty {
+            let names = context.urls.map { $0.lastPathComponent }.joined(separator: ", ")
+            out += "\nFiles the user has selected: \(names)"
+        }
+        return out
+    }
+
+    /// Build the user-role content: history + context file
+    /// snippets + the latest question.
+    private func buildUserBlock(turns: [HistoryEntry]) -> String {
+        let history = Array(turns.dropLast())
+        var out = ""
         if !history.isEmpty {
             out += "Previous conversation:\n"
             for entry in history.suffix(6) {
@@ -188,14 +233,9 @@ public final class LLMConversationService: @unchecked Sendable {
             }
             out += "\n"
         }
-        if !context.urls.isEmpty {
-            out += "Context files:\n"
-            for (i, url) in context.urls.enumerated() {
-                let snippet = readSnippet(url: url)
-                out += "\n[File \(i + 1): \(url.path)]\n\(snippet)\n[/File \(i + 1)]\n"
-            }
-            out += "\n"
-        }
+        // The most recent turn carries the latest user
+        // question, but we already kept the prior 6 turns
+        // above. Pull just the question here.
         if let lastUser = turns.last(where: { $0.role == .user })?.text {
             out += "Question: \(lastUser)\n"
         }

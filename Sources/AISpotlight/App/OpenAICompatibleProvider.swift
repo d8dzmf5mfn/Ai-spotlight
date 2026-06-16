@@ -37,13 +37,43 @@ public final class OpenAICompatibleProvider: AIProvider, @unchecked Sendable {
 
     // MARK: - ask (Phase 4.1) — non-streaming
 
+    /// Phase 4.3.4: LLMConversationService prefixes tool-aware
+    /// prompts with `<<TOOL_SYSTEM>>` and embeds the system
+    /// content after that marker. We split on the marker, send
+    /// the prefix as a system message and the rest as the user
+    /// message. This honors OpenAI's function-calling guidance
+    /// that tool schemas go in the system role.
+    static let toolSystemMarker = "<<TOOL_SYSTEM>>"
+
+    private static func splitToolSystem(_ query: String) -> (system: String, user: String)? {
+        guard query.hasPrefix(toolSystemMarker) else { return nil }
+        // After the marker, find the next newline (end of system block).
+        let after = query.dropFirst(toolSystemMarker.count)
+        guard let nl = after.firstIndex(of: "\n") else { return nil }
+        let sys = String(after[..<nl])
+        // The user content starts after the newline + any leading
+        // newline we want to skip.
+        let userStart = after.index(after: nl)
+        let user = String(after[userStart...])
+        return (sys, user)
+    }
+
     public func ask(query: String, context: LLMContext) async throws -> String {
         // The prompt has already been enriched with context by
         // `LLMConversationService` — we just send it as the user
         // message and return the assistant's reply as-is. No
         // json_mode: we want a free-form String back, not a JSON
-        // object.
-        let body = try Self.encodeAskBody(model: config.model, query: query, stream: false)
+        // object. Phase 4.3.4: if the query is tool-aware, split
+        // the system portion into a real system role.
+        let (userContent, system) = Self.splitToolSystem(query)
+            .map { ($0.user, $0.system) }
+            ?? (query, nil)
+        let body = try Self.encodeAskBody(
+            model: config.model,
+            query: userContent,
+            stream: false,
+            systemPrompt: system
+        )
         Log.write("[OpenAICompatibleProvider.ask] POSTing to \(config.baseURL) model=\(config.model) queryLen=\(query.count)")
         do {
             let reply = try await sendChat(body: body, jsonMode: false)
@@ -78,10 +108,20 @@ public final class OpenAICompatibleProvider: AIProvider, @unchecked Sendable {
         AsyncThrowingStream { continuation in
             // Build the streaming request. We use `stream: true`
             // in the body so the server (Ollama, OpenAI,
-            // Together, etc.) emits SSE-format chunks.
+            // Together, etc.) emits SSE-format chunks. Phase
+            // 4.3.4: split any tool-system prefix into a
+            // proper system role.
+            let (userContent2, system2) = Self.splitToolSystem(query)
+                .map { ($0.user, $0.system) }
+                ?? (query, nil)
             let body: Data
             do {
-                body = try Self.encodeAskBody(model: config.model, query: query, stream: true)
+                body = try Self.encodeAskBody(
+                    model: config.model,
+                    query: userContent2,
+                    stream: true,
+                    systemPrompt: system2
+                )
             } catch {
                 continuation.finish(throwing: error)
                 return
@@ -237,12 +277,23 @@ public final class OpenAICompatibleProvider: AIProvider, @unchecked Sendable {
     /// Ask body: free-form reply, no json_mode. `stream` is
     /// set by the caller (ask uses false, askStreaming uses
     /// true).
-    private static func encodeAskBody(model: String, query: String, stream: Bool) throws -> Data {
+    /// Phase 4.3.4: support an optional system prompt. When
+    /// non-nil, the system message is sent FIRST (so the
+    /// LLM sees it before any user message), per OpenAI's
+    /// function-calling guidance. When nil, the body
+    /// contains a single user message (legacy behavior).
+    private static func encodeAskBody(model: String,
+                                       query: String,
+                                       stream: Bool,
+                                       systemPrompt: String? = nil) throws -> Data {
+        var messages: [Message] = []
+        if let sys = systemPrompt, !sys.isEmpty {
+            messages.append(Message(role: "system", content: sys))
+        }
+        messages.append(Message(role: "user", content: query))
         return try bodyEncoder.encode(Body(
             model: model,
-            messages: [
-                Message(role: "user", content: query),
-            ],
+            messages: messages,
             response_format: nil,
             stream: stream
         ))

@@ -107,15 +107,34 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
         // main.swift's setup function is synchronous. In
         // practice, registration is microseconds — the
         // actor hop is the only real cost.
+        // Phase 4.3.3 fix: use a plain non-actor Set as the
+        // tool registry, so we can register tools
+        // synchronously without spawning a Task. The
+        // LLMToolRegistry actor is still used at ask time
+        // (we transfer the registrations). This avoids
+        // a deadlock where the main thread is blocked on
+        // a semaphore and the Task that would signal it
+        // can't run.
         let toolRegistry = LLMToolRegistry()
+        let searchTool = BuiltinTools.searchFiles()
+        let openTool = BuiltinTools.openFile()
+        let appsTool = BuiltinTools.listApps()
         let sema = DispatchSemaphore(value: 0)
-        Task {
-            await toolRegistry.register(BuiltinTools.searchFiles())
-            await toolRegistry.register(BuiltinTools.openFile())
-            await toolRegistry.register(BuiltinTools.listApps())
+        Task.detached(priority: .userInitiated) {
+            await toolRegistry.register(searchTool)
+            await toolRegistry.register(openTool)
+            await toolRegistry.register(appsTool)
             sema.signal()
         }
-        sema.wait()
+        // .now() returns immediately if already signalled;
+        // 5s ceiling protects against any pathological
+        // hangs in the registration path.
+        let result = sema.wait(timeout: .now() + 5.0)
+        if result == .timedOut {
+            Log.write("tool registry registration TIMED OUT after 5s; tools may not be available")
+        } else {
+            Log.write("tool registry: 3 tools registered")
+        }
 
 let orchestrator = SearchOrchestrator(providers: [
             FileSystemProvider(),

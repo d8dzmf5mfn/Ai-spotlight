@@ -1,4 +1,6 @@
 import AppKit
+import AISpotlightKit
+import Foundation
 
 /// A small icon in the macOS menu bar that toggles the AI Spotlight panel
 /// on left-click and shows a menu (Settings, Quit) on right-click.
@@ -23,9 +25,11 @@ final class StatusBarController: NSObject {
         self.onToggle = onToggle
         super.init()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        Log.write("status bar: NSStatusItem created, button=\(statusItem.button != nil)")
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "magnifyingglass.circle",
+            button.image = NSImage(systemSymbolName: "sparkles",
                                     accessibilityDescription: "AI Spotlight")
+            button.imagePosition = .imageLeading
             button.action = #selector(buttonClicked(_:))
             button.target = self
             button.toolTip = "AI Spotlight — click to open, right-click for menu"
