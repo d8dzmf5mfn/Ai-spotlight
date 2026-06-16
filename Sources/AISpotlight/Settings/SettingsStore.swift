@@ -151,25 +151,19 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    /// Phase 4.6: test the custom provider by sending a
-    /// GET /v1/models request. If the user's API key
-    /// and URL are valid, this returns 200 with the model
-    /// list. If not, we surface the error. We use /models
-    /// (not /chat/completions) because it's a GET — cheaper,
-    /// no token cost, and most providers support it.
-    func testCustomConnection() async {
+    /// Phase 4.6.2: test the Ollama connection by sending
+    /// a GET to `http://localhost:11434/api/tags`. This is
+    /// Ollama's actual health-check endpoint (not /v1/models,
+    /// which Ollama does not implement). Returns the count
+    /// of loaded models on success. We don't require the
+    /// user's ollamaModel setting to be in the list — just
+    /// that the server is reachable.
+    func testOllamaConnection() async {
         testResult = .testing
-        guard let url = URL(string: customBaseURL) else {
-            testResult = .failure("Invalid URL: \(customBaseURL)")
-            return
-        }
-        // Build the request: GET {baseURL}/models
-        let modelsURL = url.appendingPathComponent("models")
-        var req = URLRequest(url: modelsURL)
+        let url = URL(string: "http://localhost:11434/api/tags")!
+        var req = URLRequest(url: url)
         req.httpMethod = "GET"
-        if !customAPIKey.isEmpty {
-            req.setValue("Bearer \(customAPIKey)", forHTTPHeaderField: "Authorization")
-        }
+        req.timeoutInterval = 5
         do {
             let (data, response) = try await URLSession.shared.data(for: req)
             guard let http = response as? HTTPURLResponse else {
@@ -177,8 +171,72 @@ final class SettingsStore: ObservableObject {
                 return
             }
             if (200..<300).contains(http.statusCode) {
-                testResult = .success("Connected (HTTP \(http.statusCode), \(data.count) bytes)")
+                // Parse the JSON to count loaded models. The
+                // shape is {"models": [{"name": "..."}, ...]}.
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let models = json["models"] as? [[String: Any]] {
+                    testResult = .success("Ollama running, \(models.count) model(s) loaded")
+                } else {
+                    testResult = .success("Ollama running (HTTP \(http.statusCode))")
+                }
             } else {
+                let body = String(data: data, encoding: .utf8) ?? ""
+                testResult = .failure("HTTP \(http.statusCode): \(body.prefix(150))")
+            }
+        } catch let e as URLError {
+            if e.code == .cannotConnectToHost {
+                testResult = .failure("Ollama not running. Start it with: ollama serve")
+            } else {
+                testResult = .failure("Connection error: \(e.localizedDescription)")
+            }
+        } catch {
+            testResult = .failure("Error: \(error.localizedDescription)")
+        }
+    }
+
+    /// Phase 4.6: test the custom provider by sending a
+    /// minimal POST /v1/chat/completions request with
+    /// max_tokens=1. This verifies BOTH the URL and the
+    /// API key, not just /models. (Some providers accept
+    /// /models without auth, so /models alone is
+    /// insufficient for cloud keys.) The cost is one
+    /// token of generation; negligible.
+    func testCustomConnection() async {
+        testResult = .testing
+        guard let url = URL(string: customBaseURL) else {
+            testResult = .failure("Invalid URL: \(customBaseURL)")
+            return
+        }
+        // Build a minimal /v1/chat/completions request with
+        // max_tokens=1. This exercises the same endpoint the
+        // LLMConversationService uses, so a successful test
+        // means the URL, the API key, and the model name are
+        // all valid together.
+        let chatURL = url.appendingPathComponent("chat/completions")
+        var req = URLRequest(url: chatURL)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if !customAPIKey.isEmpty {
+            req.setValue("Bearer \(customAPIKey)", forHTTPHeaderField: "Authorization")
+        }
+        req.timeoutInterval = 15
+        // Tiny prompt to keep the test response fast.
+        let body: [String: Any] = [
+            "model": customModel,
+            "messages": [["role": "user", "content": "hi"]],
+            "max_tokens": 1
+        ]
+        do {
+            req.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse else {
+                testResult = .failure("Not an HTTP response")
+                return
+            }
+            if (200..<300).contains(http.statusCode) {
+                testResult = .success("Connected (HTTP \(http.statusCode))")
+            } else {
+                // Try to extract OpenAI-style error message.
                 let body = String(data: data, encoding: .utf8) ?? ""
                 let trimmed = body.prefix(200)
                 testResult = .failure("HTTP \(http.statusCode): \(trimmed)")

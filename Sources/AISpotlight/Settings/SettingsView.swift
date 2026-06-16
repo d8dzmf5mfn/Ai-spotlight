@@ -49,6 +49,23 @@ struct SettingsView: View {
                         .font(.caption).foregroundStyle(discoveryStatusColor)
                     Text("Default endpoint: http://localhost:11434")
                         .font(.caption).foregroundStyle(.secondary)
+                    // Phase 4.6.2: dedicated "Test connection"
+                    // button for the Ollama section. Calls
+                    // GET /api/tags (Ollama's actual health
+                    // endpoint) and reports how many models
+                    // are loaded. We share the testResult
+                    // UI with the Custom section so only one
+                    // status line is visible at a time.
+                    HStack {
+                        Button("Test Ollama connection") {
+                            Task { await store.testOllamaConnection() }
+                        }
+                        if store.testResult != .none {
+                            Text(store.testResult.message)
+                                .font(.caption)
+                                .foregroundStyle(testResultColor)
+                        }
+                    }
                 }
             }
 

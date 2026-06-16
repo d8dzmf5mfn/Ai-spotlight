@@ -16,12 +16,23 @@ final class SettingsWindowController: NSObject {
         let view = SettingsView()
         let host = NSHostingController(rootView: view)
         let style: NSWindow.StyleMask = [.titled, .closable, .miniaturizable]
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 460),
+        // Phase 4.6.2: the NSWindow was hardcoded to 480x460
+        // and the SwiftUI frame modifier was being ignored
+        // because the window content size is set here. We
+        // now use 600x500 as the initial content size and
+        // set `minSize` so the user can resize up. The
+        // SwiftUI body still has the ideal/min frame
+        // hints but those act as suggestions when the
+        // host controller reports a content size; the
+        // NSWindow's contentRect is what actually drives
+        // the rendered window.
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 500),
                           styleMask: style,
                           backing: .buffered, defer: false)
         window.contentViewController = host
         window.title = "AI Spotlight Settings"
         window.isReleasedWhenClosed = false
+        window.minSize = NSSize(width: 540, height: 360)
         window.center()
         NotificationCenter.default.addObserver(
             self,
