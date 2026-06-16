@@ -96,6 +96,37 @@ struct SettingsView: View {
                         }
                     }
                     TextField("Base URL", text: $store.customBaseURL, prompt: Text("https://api.openai.com/v1"))
+                    // Phase 5-H: warn the user when their
+                    // customModel is not in the discovered
+                    // catalog. This is exactly the failure
+                    // mode that caused the "deepseek-v4-flash"
+                    // 401: a stale value in UserDefaults that
+                    // DeepSeek governor rejects. We show a
+                    // red banner + a "Reset to first catalog
+                    // entry" button.
+                    if !store.discoveredModels.isEmpty
+                        && !store.discoveredModels.contains(store.customModel)
+                        && !store.useManualModel
+                        && Self.canDiscoverModels(for: store.selectedPreset) {
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Model '\(store.customModel)' is not in this provider's catalog")
+                                    .font(.callout.bold())
+                                Text("Pick a model from the dropdown above, or click Reset to use the first available model.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                if let first = store.discoveredModels.first {
+                                    Button("Reset to '\(first)'") {
+                                        store.customModel = first
+                                    }
+                                    .controlSize(.small)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
                     // Phase 5-B: the model field is now a Picker
                     // when discovery has populated the list, OR
                     // a freeform TextField when the user picks

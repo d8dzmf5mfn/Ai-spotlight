@@ -97,6 +97,18 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
             settings.liveProvider = openaiProvider
         }
 
+        // Phase 5-H: trigger an automatic model discovery at
+        // launch. This populates the Picker the first time
+        // the user opens Settings, and surfaces invalid
+        // model names (the user's prior session may have
+        // left a garbage value like "deepseek-v4-flash" in
+        // UserDefaults that would otherwise hit DeepSeek
+        // governor as 401). The discovery call is async
+        // and best-effort — if the provider is down or
+        // rejects the request, the app still works with
+        // whatever customModel the user has set.
+        Task { await settings.refreshModels() }
+
         // Phase 4.2.5: disable the LLMIntentRouter by default.
         // Every keystroke past the 0.6s debounce was firing a
         // separate LLM call to classify the intent (router ask,
