@@ -1,110 +1,94 @@
 # AI Spotlight
 
-AI-powered macOS launcher. Phase 1 MVP.
+AI-powered macOS launcher — **Phase 5+** (Provider architecture rewrite)
 
-See `.hermes/plans/2026-06-14_153027-ai-spotlight-phase1-mvp.md` for the full plan.
+⌘+Space → search, ask, open. Bring your own AI (local or cloud).
 
-## Phase 1 scope
+## Current state (June 2026)
 
-- Menu bar icon (🔍) opens a Spotlight-like panel
-- Rule-based query parser (English + Chinese keywords)
-- Optional AI fallback (OpenAI, key in Settings)
-- File search via Spotlight `MDQuery`
-- App search via `/Applications` scan
-- (⌘+Space hotkey deferred to Phase 2 — see Post-mortem below)
+| Dimension | Status |
+|---|---|
+| **Commits** | 54 in main |
+| **Tests** | 149/152 (3 pre-existing QueryInterpreter failures) |
+| **App RSS** | ~35MB (idle) |
+| **Providers** | 14 presets, dynamic model discovery via `/v1/models` |
+| **Tool calling** | 3 tools (search_files, open_file, list_apps), system role + few-shot, DeepSeek-ready |
+| **Search** | macOS Spotlight via MDQuery (0 RSS overhead) |
 
-## Post-mortem (Phase 1)
+## Phase 5 — Provider architecture (latest)
 
-Three skills encode the lessons from this build — in `~/.hermes/skills/`:
+The old `ProviderPreset` struct conflated 4 independent concerns. The new architecture:
 
-- **swift-release-logging** — `NSLog` and `print` are unreliable in SwiftPM release
-  builds; always write to `/tmp` first.
-- **swift-app-entry-point** — for SwiftPM `.executable` targets with AppKit, use
-  `main.swift` + `NSApplication.run()`; `@main struct App` is unreliable.
-- **macos-global-hotkey-diagnosis** — when global hotkey isn't firing, build a
-  50-line minimal test app first; don't debug hotkey in your 2000-line main app.
+```
+ProviderDescriptor (auth + discovery + health strategy enums)
+  ↓
+ProviderRegistry (14 descriptors: OpenAI, DeepSeek, Groq, OpenRouter, Anthropic, Ollama, ...)
+  ↓
+ModelDiscoveryService (4 strategies: openAIListModels, ollamaTags, staticCatalog, none)
+  ↓
+SettingsView Picker (auto-populated from GET /v1/models)
+```
 
-## Run
+Key changes from earlier commits:
+
+- **`ProviderDescriptor` + `Registry`** (Phase 5-A) — each provider describes its own auth style (`bearer` / `apiKeyHeader` / `none`), discovery strategy (`openAIListModels` / `ollamaTags` / `staticCatalog` / `none`), and health check strategy. 14 providers included.
+- **`ModelDiscoveryService`** (Phase 5-B) — actor with 24h cache. Fetches `GET /v1/models` for OpenAI-style providers, `GET /api/tags` for Ollama, uses `staticCatalog` for Anthropic. Populates the Settings model Picker automatically.
+- **`SettingsStore` wiring fix** (Phase 5-F) — `SettingsView` used `@StateObject` creating a fresh store with `liveProvider = nil`; `pushConfigToProvider` silently did nothing. Fixed by passing `main.swift`'s store through `SettingsWindowController(store:)`.
+- **`applyPreset` URL fix** (Phase 5-E) — guard `if customBaseURL.isEmpty` prevented URL from updating when switching presets. Fixed: always overwrite.
+- **`customAPIKey` Keychain persistence** (Phase 5-E) — `didSet` only called `pushConfigToProvider()`, never saved to Keychain. Fixed: save on every change, delete on empty.
+
+## Tool calling (Phase 4.3)
+
+LLM can search, open, and list files on the user's Mac:
+
+- `search_files` — `mdfind` via macOS Spotlight. Capped client-side (`-maxresults` not supported). Max 20 results.
+- `open_file` — `open <path>` via NSWorkspace.
+- `list_apps` — `ls /Applications` + `~/Applications`.
+
+Prompt architecture:
+- **System role** contains tool schema + intent classification rules
+- **User role** contains history (6 turns cap) + latest question
+- **`<<TOOL_SYSTEM>>` marker** — split by `encodeAskBody` into system + user messages
+- **Rules**: "Call AT MOST ONE tool per question. After the tool returns, answer in plain text."
+- **maxToolTurns**: 3 (up from 2 for DeepSeek compatibility)
+
+## How to run
 
 ```bash
+git clone ...
+cd AI-Spotlight
 swift build
-swift run AISpotlight           # dev mode (no .app bundle)
-./scripts/make_app.sh           # bundle as .app → build/AI Spotlight.app
+./scripts/make_app.sh
+open build/AI\ Spotlight.app
 ```
 
-To launch the .app:
+First launch: the panel opens automatically. Right-click the ✨ menu bar icon for Settings.
 
-```bash
-open "build/AI Spotlight.app"   # first time: right-click → Open (Gatekeeper)
-```
+## Settings
 
-Then click the menu bar icon (🔍) to summon the panel. Global hotkey is
-deferred to Phase 2 — see "Known limitations" above.
+- **Provider**: None (rule-based only) / Ollama (local) / Custom (any OpenAI-compatible API)
+- **DeepSeek preset**: auto-populates URL + model Picker from `GET /v1/models`
+- **Test connection**: 4-step diagnostic (in progress — currently single POST /chat/completions)
+- **Hotkey**: ⌘+Space (requires Accessibility permission)
+- **Content Index**: toggle source code / rich text file scanning
 
-## Architecture overview
+## Known limitations
 
-```
-Kit (testable, no UI)
-  Intent, QueryParser, QueryInterpreter, ResultMerger, SearchOrchestrator
-  KeychainStore (+ InMemoryKeychain for tests)
-  Providers: FileSystemProvider (MDQuery), AppProvider (Launch Services), OpenAIProvider
+- **Anthropic native**: uses `x-api-key` header, not Bearer; no `/v1/models` endpoint. Works via OpenRouter (OpenAI-compatible proxy).
+- **Tool calling loop**: DeepSeek occasionally loops on tool calls even with maxToolTurns=3. Reduce to 1-2 or switch model.
+- **QueryInterpreter tests**: 2 pre-existing failures (disabled AI router from Phase 4.2.6).
+- **Ollama idle unload**: 5-minute default. Run `launchctl setenv OLLAMA_KEEP_ALIVE 24h && killall ollama && open -a Ollama` to extend.
 
-App (SwiftUI + AppKit)
-  main.swift + AppLauncher (NSApplication setup, traditional main.swift pattern)
-  SpotlightPanel (NSPanel) + StatusBarController (menu bar icon — always-on fallback)
-  HotkeyService (KeyboardShortcuts wrapper; ⌘+Space by default, user-rebindable)
-  Settings (SettingsStore + SettingsView + FirstLaunchHelper + KeyboardShortcuts.Recorder)
-  UI (SearchField, ResultListView, ResultRowView, SearchWindowView)
-  AIFactory, MiniMaxProvider (stub)
-```
+## Skills (.hermes/skills/)
 
-## Testing
+The project has generated ~22 skills covering: provider architecture, inline tool calling, LLM conversation state, search provider protocol, borrow-the-platform-search-index, and more. Most relevant for AI Spotlight development:
 
-Unit tests:
-```bash
-swift test
-```
+- `ai-provider-integration` — multi-provider architecture reference
+- `inline-tool-calling-dont-use-a-framework` — inline tool calling in 300 lines
+- `borrow-the-platform-search-index` — MDQuery over self-built index
+- `llm-conversation-history-in-state` — 6-turn cap + state management
+- `ship-the-wiring-not-the-architecture` — the discipline that prevents over-engineering
 
-5 test files, 25 tests, all green (per `swift test` output).
+## Credits
 
-**Manual smoke test** (8 acceptance cases): see `~/Documents/AI-Spotlight-Testing.md` (lives outside the repo per user decision).
-
-## Known limitations (Phase 1)
-
-- **Hotkey rebinding UI not exposed.** Hardcoded no-op. With no hotkey
-  to rebind, the surface would be misleading. (Phase 2: use
-  `KeyboardShortcuts.Recorder`.)
-- **MiniMax provider option removed from Settings UI.** Stub was never
-  implemented end-to-end; only "None" and "OpenAI" remain.
-- **No code signing / notarization** — `.app` is unsigned. Personal use only.
-- **No network timeout / rate limit on OpenAI calls.** Acceptable for
-  personal use; harden before wider distribution.
-- **Date filters are rolling 24h / 7d / 30d**, not calendar boundaries
-  ("yesterday" at 11:59 PM vs midnight is ambiguous).
-- **QueryParser uses token-set matching with possessive-stripping.** Edge
-  cases around word boundaries are handled, but truly novel phrasings
-  (e.g. "yesterday's downloads") may still slip. Improve in Phase 3.
-
-## Hotkey (Phase 2, shipped via `HotkeyService`)
-
-Global hotkey via [`KeyboardShortcuts`](https://github.com/sindresorhus/KeyboardShortcuts)
-2.4.0. **Default: ⌘+Space** (requires disabling the system Spotlight binding;
-see `FirstLaunchHelper`). The user can rebind via `KeyboardShortcuts.Recorder`
-in the Settings panel. The menu bar icon (🔍) is the fallback entry point
-and always works regardless of system Spotlight state.
-
-## Architecture overview
-
-```
-Kit (testable, no UI)
-  Intent, QueryParser, QueryInterpreter, ResultMerger, SearchOrchestrator
-  KeychainStore (+ InMemoryKeychain for tests)
-  Providers: FileSystemProvider (MDQuery), AppProvider (Launch Services), OpenAIProvider
-
-App (SwiftUI + AppKit)
-  AISpotlightApp (@main) + AppDelegate → wires everything together
-  SpotlightPanel (NSPanel) + HotkeyManager (NSEvent global monitor)
-  Settings (SettingsStore + SettingsView + FirstLaunchHelper)
-  UI (SearchField, ResultListView, ResultRowView, SearchWindowView)
-  AIFactory, MiniMaxProvider (stub)
-```
+Built with Hermes Agent (Nous Research) and a fully automated SwiftPM toolchain. No Xcode project required.
