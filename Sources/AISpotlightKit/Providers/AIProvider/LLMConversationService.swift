@@ -199,61 +199,30 @@ public final class LLMConversationService: @unchecked Sendable {
     private func buildToolSystemBlock(registry: LLMToolRegistry,
                                        context: LLMContext) async -> String {
         let toolsPrompt = await registry.toolsForPrompt()
-        var out = "You are AI Spotlight, a local macOS search and assistant tool.\n"
-        out += "You can call tools to find files, open apps, and answer questions grounded in the user's real data.\n"
+        // Phase 5.0-D: shorter system block for cloud-provider
+        // governor compliance. DeepSeek and similar providers
+        // flag long system prompts that look like prompt-injection
+        // training data. We cut the 1500-token block down to
+        // ~300 tokens while keeping the essential instructions:
+        // (1) classify the user's question, (2) optionally call
+        // one tool, (3) stop after 1 tool call.
+        var out = "You are AI Spotlight, a macOS assistant.\n"
+        out += "Reply in plain text for greetings and general knowledge.\n"
+        out += "Reply with one JSON tool call ONLY when the user asks about their files.\n"
         if !toolsPrompt.isEmpty {
             out += "\n" + toolsPrompt + "\n"
         }
         out += """
-        \nDecision rules — follow these IN ORDER:
-
-        1. Read the user's question. Classify it:
-           - GREETING or small talk ("hi", "hello", "thanks",
-             "how are you", "ok") → reply in PLAIN TEXT, do
-             not call any tool. Be brief and friendly.
-           - GENERAL KNOWLEDGE question ("what is polyester",
-             "explain chemistry", "tell me about X") →
-             reply in PLAIN TEXT using your own knowledge.
-             Do not call any tool.
-           - FILE / DATA question ("find my X", "search for
-             X in my files", "open the Y file", "what's in
-             my Z folder") → use a tool. Reply with JSON.
-
-        2. When a tool is needed, reply with EXACTLY one
-           JSON object: {"tool": "<name>", "args": {<params>}}
-           - Do NOT add any explanation or prose before or
-             after the JSON.
-           - Do NOT ask the user a clarifying question
-             first — just call the tool with the most
-             obvious parameters.
-
-        3. STOP AFTER 1 TOOL CALL:
-           - After you receive a tool result, FORM A FINAL
-             ANSWER in plain text and STOP.
-           - Do NOT call another tool unless the user
-             explicitly asked for more.
-           - Calling tools in a loop is a bug. Avoid it.
-
-        Examples:
-
-        User: hi
-        Assistant: Hello! How can I help you find something today?
-
-        User: what is polyester
-        Assistant: Polyester is a category of polymers that
-        contain the ester functional group in their main
-        chain. It is commonly used in clothing and packaging.
-
-        User: find my chemistry notes about polyester
-        Assistant: {"tool": "search_files", "args": {"query": "polyester", "kind": "content"}}
+        \nRules:
+        1. Greeting ("hi", "hello") → plain text reply.
+        2. General knowledge ("what is X") → plain text reply.
+        3. User's files ("find my X", "open Y") → JSON: {"tool": "...", "args": {...}}
+        4. After a tool result → plain text answer. STOP.
+        5. Output one JSON tool call. No prose around it.
         """
-        // Phase 4.3.4: if context files were provided, list
-        // their paths in the system block too so the LLM
-        // knows the files exist. We DON'T inline contents
-        // here — that's done in the user block.
         if !context.urls.isEmpty {
             let names = context.urls.map { $0.lastPathComponent }.joined(separator: ", ")
-            out += "\nFiles the user has selected: \(names)"
+            out += "\nSelected files: \(names)"
         }
         return out
     }
