@@ -293,14 +293,53 @@ final class SettingsStore: ObservableObject {
                 testResult = .failure("Not an HTTP response")
                 return
             }
+            // Phase 5-E: robust success check. Some providers
+            // and local proxies (Ollama's OpenAI-compat shim,
+            // LM Studio, OpenClaw, LiteLLM) greedily return
+            // HTTP 200 to a max_tokens:1 request even when
+            // the model name is invalid. We previously took
+            // any 200 as a green check, which masked typos
+            // like deepseek-v4-flash (which the user then
+            // hit at chat-completion time as HTTP 401
+            // "Authentication Fails (governor)" from
+            // DeepSeek's model-authorization layer).
+            //
+            // The new check: a real success response must
+            // contain a `choices` array with at least one
+            // entry. A 200 with no choices or with an
+            // `error` field in the body is reported as a
+            // failure, not a success.
             if (200..<300).contains(http.statusCode) {
-                testResult = .success("Connected (HTTP \(http.statusCode))")
-            } else {
-                // Try to extract OpenAI-style error message.
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    if let errorDict = json["error"] as? [String: Any] {
+                        let message = (errorDict["message"] as? String) ?? "Unknown error"
+                        testResult = .failure("HTTP \(http.statusCode): \(message)")
+                        return
+                    }
+                    if let choices = json["choices"] as? [[String: Any]], !choices.isEmpty {
+                        testResult = .success("Connected (HTTP \(http.statusCode), model '\(customModel)' accepted)")
+                        return
+                    }
+                }
+                // 200 but no choices and no error — could be a
+                // proxy that wraps the body. Surface the raw
+                // body so the user can see what's happening.
                 let body = String(data: data, encoding: .utf8) ?? ""
-                let trimmed = body.prefix(200)
-                testResult = .failure("HTTP \(http.statusCode): \(trimmed)")
+                testResult = .failure("HTTP 200 but response is not a chat completion: \(body.prefix(200))")
+                return
             }
+            // 4xx / 5xx — parse OpenAI-style error body first
+            // ({"error": {"message": "..."}}), then fall back
+            // to a raw body slice.
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let errorDict = json["error"] as? [String: Any],
+               let message = errorDict["message"] as? String {
+                testResult = .failure("HTTP \(http.statusCode): \(message)")
+                return
+            }
+            let body = String(data: data, encoding: .utf8) ?? ""
+            let trimmed = body.prefix(200)
+            testResult = .failure("HTTP \(http.statusCode): \(trimmed)")
         } catch let e as URLError {
             testResult = .failure("Connection error: \(e.localizedDescription)")
         } catch {
