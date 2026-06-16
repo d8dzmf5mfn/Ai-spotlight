@@ -581,6 +581,27 @@ final class AppState: ObservableObject {
     /// silently trigger the LLM. That's a bad Spotlight
     /// emulation. The current rule fixes that.
     func activate() async {
+        // Phase 5-E: if there's a pending debounce timer
+        // from the last keystroke, fire the search NOW
+        // instead of waiting 600ms. Without this, the user
+        // types "settings" and presses Enter immediately —
+        // the debounce hasn't fired yet, runSearch hasn't
+        // populated the command result, selection is nil,
+        // and the LLM interprets "settings" as an AI query.
+        if let timer = debounceTimer, timer.isValid {
+            let q = self.query
+            timer.invalidate()
+            debounceTimer = nil
+            // Run the search synchronously before checking
+            // selection. This is a fire-and-forget within
+            // activate() — the search task will update
+            // self.results before the guard-let below reads
+            // it, because runSearch awaits and the actor
+            // serializes access to self.
+            searchTask?.cancel()
+            searchTask = Task { await self.runSearch(q) }
+            _ = await searchTask?.value
+        }
         // Priority 1: a highlighted result always wins.
         if let i = selection, results.indices.contains(i) {
             let r = results[i]
