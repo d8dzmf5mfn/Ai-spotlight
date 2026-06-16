@@ -155,6 +155,13 @@ final class SettingsStore: ObservableObject {
     /// single-line testResult.
     @Published var diagnosticVerdicts: [ConnectionDiagnosticService.Step: ConnectionDiagnosticService.Verdict] = [:]
     @Published var isRunningDiagnostic: Bool = false
+    /// Phase 5-D: same 4-row structure for the Ollama
+    /// section. We keep these in a separate dictionary so
+    /// the Ollama and Custom diagnostics don't clobber
+    /// each other when the user switches providers in
+    /// Settings.
+    @Published var ollamaDiagnosticVerdicts: [ConnectionDiagnosticService.Step: ConnectionDiagnosticService.Verdict] = [:]
+    @Published var isRunningOllamaDiagnostic: Bool = false
     /// True while a single-line "test connection" is in
     /// flight (kept for back-compat with the old testResult
     /// UI on the Ollama section, where the simpler 1-line
@@ -451,5 +458,38 @@ final class SettingsStore: ObservableObject {
             model: customModel
         )
         diagnosticVerdicts = results
+    }
+
+    /// Phase 5-D: 4-step diagnostic for the Ollama
+    /// section. Same actor, hard-coded Ollama
+    /// descriptor, separate verdict dictionary. The
+    /// Ollama base URL is `http://localhost:11434` (the
+    /// discovery strategy is `.ollamaTags` which hits
+    /// `/api/tags`, not `/v1/models`). The 4 steps are:
+    /// 1. URL reachable (localhost:11434)
+    /// 2. Ollama running (200 from /api/tags)
+    /// 3. Model loaded (gemma2:2b is in the catalog)
+    /// 4. Inference works (POST /api/generate or
+    ///    /api/chat — Ollama's native endpoint, not
+    ///    /v1/chat/completions)
+    func runOllamaDiagnostic() async {
+        guard let descriptor = await ProviderRegistry.shared.descriptor(for: "ollama") else {
+            ollamaDiagnosticVerdicts = [:]
+            return
+        }
+        let baseURL = descriptor.defaultBaseURL
+        ollamaDiagnosticVerdicts = Dictionary(
+            uniqueKeysWithValues: ConnectionDiagnosticService.Step.allCases.map { ($0, .pending) }
+        )
+        isRunningOllamaDiagnostic = true
+        defer { isRunningOllamaDiagnostic = false }
+        let service = ConnectionDiagnosticService()
+        let results = await service.diagnose(
+            descriptor: descriptor,
+            baseURL: baseURL,
+            apiKey: "",
+            model: ollamaModel
+        )
+        ollamaDiagnosticVerdicts = results
     }
 }

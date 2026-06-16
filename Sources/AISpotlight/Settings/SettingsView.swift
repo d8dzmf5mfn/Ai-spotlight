@@ -53,23 +53,13 @@ struct SettingsView: View {
                         .font(.caption).foregroundStyle(discoveryStatusColor)
                     Text("Default endpoint: http://localhost:11434")
                         .font(.caption).foregroundStyle(.secondary)
-                    // Phase 4.6.2: dedicated "Test connection"
-                    // button for the Ollama section. Calls
-                    // GET /api/tags (Ollama's actual health
-                    // endpoint) and reports how many models
-                    // are loaded. We share the testResult
-                    // UI with the Custom section so only one
-                    // status line is visible at a time.
-                    HStack {
-                        Button("Test Ollama connection") {
-                            Task { await store.testOllamaConnection() }
-                        }
-                        if store.testResult != .none {
-                            Text(store.testResult.message)
-                                .font(.caption)
-                                .foregroundStyle(testResultColor)
-                        }
-                    }
+                    // Phase 5-D: 4-step diagnostic replaces the
+                    // 1-line "Test Ollama connection" button.
+                    // Same 4-row UI as the Custom section,
+                    // but uses ollamaDiagnosticVerdicts and
+                    // a separate verdict dict so the two
+                    // sections don't clobber each other.
+                    ollamaDiagnosticView
                 }
             }
 
@@ -310,26 +300,51 @@ struct SettingsView: View {
     /// triggers `store.runDiagnostic()`.
     @ViewBuilder
     private var diagnosticView: some View {
+        diagnosticSection(
+            verdicts: store.diagnosticVerdicts,
+            isRunning: store.isRunningDiagnostic,
+            onRun: { Task { await store.runDiagnostic() } }
+        )
+    }
+
+    /// Phase 5-D: same 4-row UI for the Ollama section.
+    /// Separate verdict dict, separate isRunning flag,
+    /// separate run method. Same row layout.
+    @ViewBuilder
+    private var ollamaDiagnosticView: some View {
+        diagnosticSection(
+            verdicts: store.ollamaDiagnosticVerdicts,
+            isRunning: store.isRunningOllamaDiagnostic,
+            onRun: { Task { await store.runOllamaDiagnostic() } }
+        )
+    }
+
+    /// Shared 4-row diagnostic view. Both the Custom
+    /// section and the Ollama section use this.
+    @ViewBuilder
+    private func diagnosticSection(
+        verdicts: [ConnectionDiagnosticService.Step: ConnectionDiagnosticService.Verdict],
+        isRunning: Bool,
+        onRun: @escaping () -> Void
+    ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Button {
-                Task { await store.runDiagnostic() }
-            } label: {
+            Button(action: onRun) {
                 HStack {
-                    if store.isRunningDiagnostic {
+                    if isRunning {
                         ProgressView().scaleEffect(0.5).frame(width: 14, height: 14)
                     } else {
                         Image(systemName: "stethoscope")
                     }
-                    Text(store.isRunningDiagnostic ? "Running diagnostic…" : "Run full diagnostic")
+                    Text(isRunning ? "Running diagnostic…" : "Run full diagnostic")
                 }
             }
-            .disabled(store.isRunningDiagnostic)
+            .disabled(isRunning)
             // Show the 4 rows. We always show them once
             // diagnostic has been run at least once; before
             // that they're hidden so the Settings page
             // doesn't grow when the user hasn't done anything.
             ForEach(ConnectionDiagnosticService.Step.allCases, id: \.self) { step in
-                if let verdict = store.diagnosticVerdicts[step] {
+                if let verdict = verdicts[step] {
                     diagnosticRow(step: step, verdict: verdict)
                 }
             }
