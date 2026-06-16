@@ -14,7 +14,7 @@ Log.bootstrap("main.swift top-level code entered")
 //   - menu bar icon (always available, see StatusBarController)
 //   - ⌘+Space (via KeyboardShortcuts, see HotkeyService)
 //   - "settings" / "quit" as a search command (see CommandMatcher)
-_ = AppLauncher.shared
+_ = AppLauncher()
 
 /// File-based logger that survives release-build NSLog stripping and
 /// SwiftPM executable target quirks. Writes to /tmp so it works regardless
@@ -22,9 +22,28 @@ _ = AppLauncher.shared
 /// identity. The /tmp path is the LAST-RESORT diagnostic surface — when
 /// everything else (print, NSLog, stderr) has failed, this still works.
 final class AppLauncher: NSObject, NSApplicationDelegate {
-    static let shared = AppLauncher()
+    /// Phase 5-F: removed `static let shared` to avoid
+    /// the recursive `dispatch_once` lock crash. The
+    /// previous code had a `static let shared` singleton
+    /// AND an `init()` that called `app.run()` (which
+    /// blocks). Then `applicationDidFinishLaunching` would
+    /// also access `AppLauncher.shared`, hitting the
+    /// already-held dispatch_once lock recursively on
+    /// the main thread. SIGTRAP from libdispatch.
+    /// We drop the singleton; the AppLauncher has a single
+    /// instance managed by NSApplication's delegate, and
+    /// `applicationDidFinishLaunching` is the only place
+    /// that needs access to it.
     var panel: SpotlightPanel!
     var state: AppState!
+    /// Phase 5-F: SettingsStore must live for the entire
+    /// process lifetime. If it doesn't, the `liveProvider`
+    /// weak reference on it becomes nil after main.swift's
+    /// setup function returns, and Settings edits no longer
+    /// push config updates to the running provider. That
+    /// was the source of the "Settings green but ask 401"
+    /// bug — SettingsStore was being deallocated.
+    var settings: SettingsStore!
     var settingsWindow: SettingsWindowController!
 
     override init() {
@@ -54,6 +73,15 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
         Log.write("accessibility trusted=\(trusted)")
 
         let settings = SettingsStore()
+        // Phase 5-F: keep SettingsStore alive for the
+        // entire process lifetime so the liveProvider weak
+        // reference stays valid. Previously `settings` was
+        // a local var that went out of scope at the end of
+        // this function, taking the provider wiring with
+        // it. We stash a strong ref on the AppLauncher
+        // instance itself (which NSApplication owns for
+        // the life of the process).
+        self.settings = settings
         // SettingsStore's @Published didSet has already written each field
         // to UserDefaults; we read the resolved config back from settings.
         let aiConfig = settings.resolveConfig()
