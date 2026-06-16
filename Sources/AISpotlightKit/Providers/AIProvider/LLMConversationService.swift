@@ -198,24 +198,47 @@ public final class LLMConversationService: @unchecked Sendable {
             out += "\n" + toolsPrompt + "\n"
         }
         out += """
-        \nHow to call a tool:
-        - Reply with EXACTLY one JSON object: {"tool": "<name>", "args": {<params>}}
-        - Do NOT add any explanation, prose, or markdown before or after the JSON.
-        - If you don't need a tool to answer, just write the answer in plain text.
+        \nDecision rules — follow these IN ORDER:
 
-        CRITICAL — STOP AFTER 1 TOOL CALL:
-        - After you receive a tool result, FORM A FINAL ANSWER.
-        - Do NOT call another tool unless the user explicitly asked for more.
-        - Most user questions are satisfied with ONE search_files call.
-        - Once you have the data you need, write the answer in plain text and STOP.
-        - Calling tools in a loop is a bug. Avoid it.
+        1. Read the user's question. Classify it:
+           - GREETING or small talk ("hi", "hello", "thanks",
+             "how are you", "ok") → reply in PLAIN TEXT, do
+             not call any tool. Be brief and friendly.
+           - GENERAL KNOWLEDGE question ("what is polyester",
+             "explain chemistry", "tell me about X") →
+             reply in PLAIN TEXT using your own knowledge.
+             Do not call any tool.
+           - FILE / DATA question ("find my X", "search for
+             X in my files", "open the Y file", "what's in
+             my Z folder") → use a tool. Reply with JSON.
 
-        Example (do NOT output this prose — just the JSON block):
+        2. When a tool is needed, reply with EXACTLY one
+           JSON object: {"tool": "<name>", "args": {<params>}}
+           - Do NOT add any explanation or prose before or
+             after the JSON.
+           - Do NOT ask the user a clarifying question
+             first — just call the tool with the most
+             obvious parameters.
+
+        3. STOP AFTER 1 TOOL CALL:
+           - After you receive a tool result, FORM A FINAL
+             ANSWER in plain text and STOP.
+           - Do NOT call another tool unless the user
+             explicitly asked for more.
+           - Calling tools in a loop is a bug. Avoid it.
+
+        Examples:
+
+        User: hi
+        Assistant: Hello! How can I help you find something today?
+
+        User: what is polyester
+        Assistant: Polyester is a category of polymers that
+        contain the ester functional group in their main
+        chain. It is commonly used in clothing and packaging.
 
         User: find my chemistry notes about polyester
         Assistant: {"tool": "search_files", "args": {"query": "polyester", "kind": "content"}}
-
-        (User then receives the search result and the assistant writes the final answer in plain text.)
         """
         // Phase 4.3.4: if context files were provided, list
         // their paths in the system block too so the LLM
