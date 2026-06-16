@@ -15,9 +15,9 @@ final class ProviderPresetTests: XCTestCase {
             // "custom" is the catch-all with empty URL/model —
             // skip the URL/model check for it.
             if p.id != "custom" {
-                XCTAssertFalse(p.baseURL.isEmpty, "preset \\(p.id) baseURL is empty")
-                XCTAssertTrue(p.baseURL.hasPrefix("https://") || p.baseURL.hasPrefix("http://"),
-                              "preset \\(p.id) baseURL is not a URL: \\(p.baseURL)")
+                XCTAssertFalse(p.defaultBaseURL.isEmpty, "preset \\(p.id) baseURL is empty")
+                XCTAssertTrue(p.defaultBaseURL.hasPrefix("https://") || p.defaultBaseURL.hasPrefix("http://"),
+                              "preset \\(p.id) baseURL is not a URL: \\(p.defaultBaseURL)")
                 XCTAssertFalse(p.defaultModel.isEmpty,
                               "preset \\(p.id) defaultModel is empty")
             }
@@ -41,7 +41,7 @@ final class ProviderPresetTests: XCTestCase {
     func testByIdReturnsPreset() {
         XCTAssertNotNil(ProviderPreset.by(id: "deepseek"))
         XCTAssertNotNil(ProviderPreset.by(id: "openai"))
-        XCTAssertEqual(ProviderPreset.by(id: "deepseek")?.baseURL,
+        XCTAssertEqual(ProviderPreset.by(id: "deepseek")?.defaultBaseURL,
                        "https://api.deepseek.com/v1")
     }
 

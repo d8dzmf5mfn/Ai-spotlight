@@ -81,7 +81,7 @@ final class SettingsStore: ObservableObject {
         // equals the current preset's value (meaning the
         // user hasn't manually edited it).
         if customBaseURL.isEmpty {
-            customBaseURL = preset.baseURL
+            customBaseURL = preset.defaultBaseURL
         }
     }
 
