@@ -157,6 +157,21 @@ private struct LLMReplyView: View {
                         }
                     }
                 } else if let reply = state.llmReply, !reply.isEmpty {
+                    // Phase 4.3.2: if the LLM used tools, show
+                    // the tool trace above the final answer.
+                    // Each entry is "🔧 tool_name: summary"
+                    // produced by AppState.runLLMAsk from the
+                    // AskWithToolsResult.toolCalls list.
+                    if !state.toolTrace.isEmpty {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(state.toolTrace, id: \.self) { entry in
+                                Text(entry)
+                                    .font(.caption)
+                                    .foregroundStyle(.purple.opacity(0.85))
+                            }
+                        }
+                        .padding(.bottom, 4)
+                    }
                     // Streaming: llmReply grows chunk-by-chunk as the
                     // LLM produces tokens. ScrollViewReader lets us
                     // auto-scroll to the bottom so the user always

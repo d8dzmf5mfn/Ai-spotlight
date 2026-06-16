@@ -97,12 +97,32 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
         // ContentSearchProvider uses kMDItemTextContent under
         // the hood — no in-memory index, no mmap, no SQLite.
         let contentProvider = ContentSearchProvider()
-        let orchestrator = SearchOrchestrator(providers: [
+                // Phase 4.3.2: the LLM tool registry. The LLM can
+        // call any of these tools by emitting a JSON block
+        // in its reply. We pre-register the three built-in
+        // tools (search_files via mdfind, open_file via
+        // /usr/bin/open, list_apps via ls). The registry is
+        // an actor so registration is async; we use a
+        // non-async semaphore-bridged wait here because
+        // main.swift's setup function is synchronous. In
+        // practice, registration is microseconds — the
+        // actor hop is the only real cost.
+        let toolRegistry = LLMToolRegistry()
+        let sema = DispatchSemaphore(value: 0)
+        Task {
+            await toolRegistry.register(BuiltinTools.searchFiles())
+            await toolRegistry.register(BuiltinTools.openFile())
+            await toolRegistry.register(BuiltinTools.listApps())
+            sema.signal()
+        }
+        sema.wait()
+
+let orchestrator = SearchOrchestrator(providers: [
             FileSystemProvider(),
             AppProvider(),
             contentProvider,
         ])
-        state = AppState(interpreter: interpreter, orchestrator: orchestrator, llmService: llmService)
+        state = AppState(interpreter: interpreter, orchestrator: orchestrator, llmService: llmService, toolRegistry: toolRegistry)
 
         // Start indexing in the background after a short delay
         // Phase 4.2.10: removed the IndexManager initial-walk.

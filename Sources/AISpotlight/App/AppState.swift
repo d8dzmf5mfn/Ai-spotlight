@@ -87,6 +87,22 @@ final class AppState: ObservableObject {
     /// so the cap is enforced at the boundary.
     @Published var llmHistory: [LLMConversationService.HistoryEntry] = []
 
+    /// Phase 4.3.2: when true, the LLM has access to the
+    /// tool registry and will call tools as needed. The user
+    /// can disable this in Settings. Default true because
+    /// tool use is the whole point of the "AI Spotlight" pitch.
+    @Published var useTools: Bool = true
+
+        /// Phase 4.3.2: the trace of tools the LLM used during the
+    /// current ask. Each entry is "Used search_files: Found 5
+    /// files matching polyester". The SwiftUI view shows this
+    /// above the LLM reply so the user knows what the AI did.
+    @Published var toolTrace: [String] = []
+
+    /// Phase 4.3.2: the tool registry the LLM can call. Wired
+    /// in from main.swift. Set to `nil` to disable tool use.
+    private let toolRegistry: LLMToolRegistry
+
     private let interpreter: QueryInterpreter
     private let orchestrator: SearchOrchestrator
     /// Optional LLM conversation service. Nil when the user picked
@@ -99,10 +115,12 @@ final class AppState: ObservableObject {
 
     init(interpreter: QueryInterpreter,
          orchestrator: SearchOrchestrator,
-         llmService: LLMConversationService? = nil) {
+         llmService: LLMConversationService? = nil,
+        toolRegistry: LLMToolRegistry = LLMToolRegistry()) {
         self.interpreter = interpreter
         self.orchestrator = orchestrator
         self.llmService = llmService
+        self.toolRegistry = toolRegistry
         // Phase 4.2.6 (P2): listen for Ollama.app termination.
         // We use NSWorkspace's notification center to detect when
         // the user explicitly Cmd+Q's Ollama (or quits it via
@@ -280,17 +298,11 @@ final class AppState: ObservableObject {
     ///    catch block always runs.
     private func runLLMAsk(query: String, contextURLs: [URL]) async {
         guard let service = llmService else {
-            // No LLM configured — show a clear message in the UI.
             Log.write("[AppState] runLLMAsk: NO llmService configured")
             llmReply = "(No AI provider configured. Open Settings to pick Ollama or a custom endpoint.)"
             return
         }
-        Log.write("[AppState] runLLMAsk: starting streaming, q=\(query.prefix(60)), historyTurns=\(llmHistory.count / 2)")
-        // Bump the generation counter; older in-flight tasks
-        // that complete after this point will see the mismatch
-        // and discard their results. This is the only safe
-        // way to handle "user pressed Enter on a new ask while
-        // the old one was still running" without races.
+        Log.write("[AppState] runLLMAsk: starting, q=\(query.prefix(60)), useTools=\(useTools)")
         llmGeneration += 1
         let currentGeneration = llmGeneration
         let historySnapshot = llmHistory
@@ -298,7 +310,61 @@ final class AppState: ObservableObject {
         isLLMBusy = true
         llmReply = ""
         llmError = nil
+        toolTrace = []
 
+        // Phase 4.3.2: when useTools is true, take the tool
+        // path. We optimistically dispatch to askWithTools
+        // regardless of whether the registry actually has
+        // any tools — if it's empty, the loop just returns
+        // the LLM's plain text answer without making any
+        // tool calls. Cheaper than an await + isEmpty check
+        // at the gate, and the wire-time cost is identical.
+        if useTools {
+            llmTask = Task { [weak self] in
+                do {
+                    let context = await LLMContext.from(urls: contextURLs)
+                    let result = try await service.askWithTools(
+                        query: query,
+                        history: historySnapshot,
+                        context: context,
+                        registry: toolRegistry,
+                        maxToolTurns: 3
+                    )
+                    if Task.isCancelled { return }
+                    await MainActor.run {
+                        guard let self, self.llmGeneration == currentGeneration else { return }
+                        self.toolTrace = result.toolCalls.map { call in
+                            "🔧 \(call.tool): \(call.summary)"
+                        }
+                        self.llmReply = result.finalAnswer
+                        self.isLLMBusy = false
+                        self.llmHistory.append(.init(role: .user, text: query))
+                        self.llmHistory.append(.init(role: .assistant, text: result.finalAnswer))
+                        if self.llmHistory.count > 12 {
+                            self.llmHistory.removeFirst(self.llmHistory.count - 12)
+                        }
+                    }
+                    Log.write("[AppState] runLLMAsk: tool flow done, toolCalls=\(result.toolCalls.count), replyLength=\(result.finalAnswer.count)")
+                } catch {
+                    let classified = Self.classifyLLMError(error)
+                    let errMsg = classified.message
+                    await MainActor.run {
+                        guard let self, self.llmGeneration == currentGeneration else { return }
+                        if Self.isURLCancelled(error) {
+                            self.isLLMBusy = false
+                        } else {
+                            self.llmError = errMsg
+                            self.llmErrorKind = classified.kind
+                            self.isLLMBusy = false
+                        }
+                    }
+                    Log.write("[AppState] runLLMAsk ERROR: \(errMsg)")
+                }
+            }
+            return
+        }
+
+        // Streaming path (no tools).
         llmTask = Task { [weak self] in
             do {
                 let context = await LLMContext.from(urls: contextURLs)
@@ -315,12 +381,6 @@ final class AppState: ObservableObject {
                     self.llmError = nil
                     self.llmErrorKind = nil
                     self.isLLMBusy = false
-                    // Phase 4.2.6: append the user turn and
-                    // the assistant reply to the history so
-                    // the next ask has prior context. Cap at
-                    // 12 messages (6 user + 6 assistant) so
-                    // the prompt stays small for gemma2:2b's
-                    // 2K context window.
                     self.llmHistory.append(.init(role: .user, text: query))
                     self.llmHistory.append(.init(role: .assistant, text: self.llmReply ?? ""))
                     if self.llmHistory.count > 12 {
@@ -329,19 +389,12 @@ final class AppState: ObservableObject {
                 }
                 Log.write("[AppState] runLLMAsk: stream done, llmReply length=\(self?.llmReply?.count ?? 0), historyCount=\(self?.llmHistory.count ?? 0)")
             } catch {
-                // With the new askStreaming impl, the catch
-                // block is guaranteed to run when the provider
-                // throws — even synchronously, even before
-                // any chunk is yielded.
                 let classified = Self.classifyLLMError(error)
                 let errMsg = classified.message
                 let errKind = classified.kind
                 await MainActor.run {
                     guard let self, self.llmGeneration == currentGeneration else { return }
                     if Self.isURLCancelled(error) {
-                        // Cancelled = user (or a new ask) interrupted
-                        // us. Don't surface that as an error; just
-                        // clean up the busy state.
                         self.isLLMBusy = false
                     } else {
                         self.llmError = errMsg
@@ -353,6 +406,8 @@ final class AppState: ObservableObject {
             }
         }
     }
+
+
 
     /// Monotonic counter that lets us ignore the outcome of a
     /// cancelled-but-still-running LLM task. Without this, a
