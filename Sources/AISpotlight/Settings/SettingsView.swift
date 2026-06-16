@@ -165,6 +165,33 @@ struct SettingsView: View {
         // there's nothing to "save" — the user's edits are already live.
         NSApp.keyWindow?.performClose(nil)
     }
+
+
+
+    /// Phase 4.3.7: warn when the chosen model is
+    /// likely to OOM on a 16GB Mac. Naming conventions
+    /// like "4b", "7b", "12b" give a rough size hint:
+    /// those are 2.5GB+ at Q4 quantization and tend
+    /// to OOM alongside an active AI Spotlight
+    /// process. The user can ignore if they have 32GB+.
+    @ViewBuilder
+    private var modelSizeWarning: some View {
+        let m = store.ollamaModel.lowercased()
+        let risky = m.contains(":4b") || m.contains(":7b") || m.contains(":8b")
+                || m.contains(":12b") || m.contains(":14b") || m.contains(":27b")
+                || m.contains(":30b") || m.contains(":70b")
+        if risky {
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .font(.caption)
+                Text("Heads up: \(store.ollamaModel) needs ~2.5GB+ of RAM. On a 16GB Mac with AI Spotlight running, this can OOM. Try gemma2:2b or qwen2.5:3b.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
 }
 
 /// Owns the auto-discovery UI state. Kept as an ObservableObject so the
@@ -206,4 +233,5 @@ final class LocalModelDiscoveryState: ObservableObject {
         }
         isDetecting = false
     }
+
 }
