@@ -162,37 +162,6 @@ final class SettingsStore: ObservableObject {
     /// Settings.
     @Published var ollamaDiagnosticVerdicts: [ConnectionDiagnosticService.Step: ConnectionDiagnosticService.Verdict] = [:]
     @Published var isRunningOllamaDiagnostic: Bool = false
-    /// True while a single-line "test connection" is in
-    /// flight (kept for back-compat with the old testResult
-    /// UI on the Ollama section, where the simpler 1-line
-    /// status was less confusing). Will be removed in commit
-    /// D when the Ollama section also adopts the 4-row UI.
-    @Published var testResult: TestResult = .none
-    public enum TestResult: Equatable, Sendable {
-        case none
-        case testing
-        case success(String)
-        case failure(String)
-        var message: String {
-            switch self {
-            case .none: return ""
-            case .testing: return "Testing…"
-            case .success(let m): return m
-            case .failure(let m): return m
-            }
-        }
-        /// "success", "failure", or "neutral". The SwiftUI
-        /// view maps this to a Color in the UI layer;
-        /// we keep the store Color-free so the model
-        /// stays portable.
-        public var style: String {
-            switch self {
-            case .none, .testing: return "neutral"
-            case .success: return "success"
-            case .failure: return "failure"
-            }
-        }
-    }
 
     /// Apply a preset's defaults to the URL and model
     /// fields. We only overwrite fields that are still at
@@ -294,41 +263,7 @@ final class SettingsStore: ObservableObject {
     /// of loaded models on success. We don't require the
     /// user's ollamaModel setting to be in the list — just
     /// that the server is reachable.
-    func testOllamaConnection() async {
-        testResult = .testing
-        let url = URL(string: "http://localhost:11434/api/tags")!
-        var req = URLRequest(url: url)
-        req.httpMethod = "GET"
-        req.timeoutInterval = 5
-        do {
-            let (data, response) = try await URLSession.shared.data(for: req)
-            guard let http = response as? HTTPURLResponse else {
-                testResult = .failure("Not an HTTP response")
-                return
-            }
-            if (200..<300).contains(http.statusCode) {
-                // Parse the JSON to count loaded models. The
-                // shape is {"models": [{"name": "..."}, ...]}.
-                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let models = json["models"] as? [[String: Any]] {
-                    testResult = .success("Ollama running, \(models.count) model(s) loaded")
-                } else {
-                    testResult = .success("Ollama running (HTTP \(http.statusCode))")
-                }
-            } else {
-                let body = String(data: data, encoding: .utf8) ?? ""
-                testResult = .failure("HTTP \(http.statusCode): \(body.prefix(150))")
-            }
-        } catch let e as URLError {
-            if e.code == .cannotConnectToHost {
-                testResult = .failure("Ollama not running. Start it with: ollama serve")
-            } else {
-                testResult = .failure("Connection error: \(e.localizedDescription)")
-            }
-        } catch {
-            testResult = .failure("Error: \(error.localizedDescription)")
-        }
-    }
+
 
     /// Phase 4.6: test the custom provider by sending a
     /// minimal POST /v1/chat/completions request with
@@ -337,91 +272,7 @@ final class SettingsStore: ObservableObject {
     /// /models without auth, so /models alone is
     /// insufficient for cloud keys.) The cost is one
     /// token of generation; negligible.
-    func testCustomConnection() async {
-        testResult = .testing
-        guard let url = URL(string: customBaseURL) else {
-            testResult = .failure("Invalid URL: \(customBaseURL)")
-            return
-        }
-        // Build a minimal /v1/chat/completions request with
-        // max_tokens=1. This exercises the same endpoint the
-        // LLMConversationService uses, so a successful test
-        // means the URL, the API key, and the model name are
-        // all valid together.
-        let chatURL = url.appendingPathComponent("chat/completions")
-        var req = URLRequest(url: chatURL)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if !customAPIKey.isEmpty {
-            req.setValue("Bearer \(customAPIKey)", forHTTPHeaderField: "Authorization")
-        }
-        req.timeoutInterval = 15
-        // Tiny prompt to keep the test response fast.
-        let body: [String: Any] = [
-            "model": customModel,
-            "messages": [["role": "user", "content": "hi"]],
-            "max_tokens": 1
-        ]
-        do {
-            req.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let (data, response) = try await URLSession.shared.data(for: req)
-            guard let http = response as? HTTPURLResponse else {
-                testResult = .failure("Not an HTTP response")
-                return
-            }
-            // Phase 5-E: robust success check. Some providers
-            // and local proxies (Ollama's OpenAI-compat shim,
-            // LM Studio, OpenClaw, LiteLLM) greedily return
-            // HTTP 200 to a max_tokens:1 request even when
-            // the model name is invalid. We previously took
-            // any 200 as a green check, which masked typos
-            // like deepseek-v4-flash (which the user then
-            // hit at chat-completion time as HTTP 401
-            // "Authentication Fails (governor)" from
-            // DeepSeek's model-authorization layer).
-            //
-            // The new check: a real success response must
-            // contain a `choices` array with at least one
-            // entry. A 200 with no choices or with an
-            // `error` field in the body is reported as a
-            // failure, not a success.
-            if (200..<300).contains(http.statusCode) {
-                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    if let errorDict = json["error"] as? [String: Any] {
-                        let message = (errorDict["message"] as? String) ?? "Unknown error"
-                        testResult = .failure("HTTP \(http.statusCode): \(message)")
-                        return
-                    }
-                    if let choices = json["choices"] as? [[String: Any]], !choices.isEmpty {
-                        testResult = .success("Connected (HTTP \(http.statusCode), model '\(customModel)' accepted)")
-                        return
-                    }
-                }
-                // 200 but no choices and no error — could be a
-                // proxy that wraps the body. Surface the raw
-                // body so the user can see what's happening.
-                let body = String(data: data, encoding: .utf8) ?? ""
-                testResult = .failure("HTTP 200 but response is not a chat completion: \(body.prefix(200))")
-                return
-            }
-            // 4xx / 5xx — parse OpenAI-style error body first
-            // ({"error": {"message": "..."}}), then fall back
-            // to a raw body slice.
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let errorDict = json["error"] as? [String: Any],
-               let message = errorDict["message"] as? String {
-                testResult = .failure("HTTP \(http.statusCode): \(message)")
-                return
-            }
-            let body = String(data: data, encoding: .utf8) ?? ""
-            let trimmed = body.prefix(200)
-            testResult = .failure("HTTP \(http.statusCode): \(trimmed)")
-        } catch let e as URLError {
-            testResult = .failure("Connection error: \(e.localizedDescription)")
-        } catch {
-            testResult = .failure("Error: \(error.localizedDescription)")
-        }
-    }
+
 
     /// Phase 5-C: run the 4-step connection diagnostic.
     /// Replaces the single-line testCustomConnection for

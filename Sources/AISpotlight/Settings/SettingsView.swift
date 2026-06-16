@@ -282,17 +282,6 @@ struct SettingsView: View {
         }
     }
 
-    /// Phase 4.6: map the Color-free TestResult to a
-    /// SwiftUI Color. Centralized here so the styling
-    /// lives in the view, not the model.
-    private var testResultColor: Color {
-        switch store.testResult.style {
-        case "success": return .green
-        case "failure": return .red
-        default: return .secondary
-        }
-    }
-
     /// Phase 5-C: the 4-row connection diagnostic view.
     /// Renders one row per step (URL, Auth, Model,
     /// Inference), each with ✓ / ⏳ / ✗ + the step's
@@ -388,13 +377,6 @@ struct SettingsView: View {
         }
     }
 
-    private func verdictColor(_ v: ConnectionDiagnosticService.Verdict) -> Color {
-        switch v {
-        case .passed: return .green
-        case .failed: return .red
-        case .running, .pending: return .secondary
-        }
-    }
 
     /// Phase 5-B: the model name field. Smart field that
     /// shows a Picker when discovery has populated the
