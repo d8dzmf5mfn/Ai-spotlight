@@ -69,8 +69,15 @@ final class SettingsStore: ObservableObject {
     /// and customAPIKey. Idempotent and cheap — it's a
     /// struct copy + a property reassignment.
     func pushConfigToProvider() {
-        guard let provider = liveProvider else { return }
-        guard let newConfig = resolveConfig() else { return }
+        guard let provider = liveProvider else {
+            Log.write("[SettingsStore] pushConfigToProvider: no liveProvider (SettingsStore was deallocated or wiring missing)")
+            return
+        }
+        guard let newConfig = resolveConfig() else {
+            Log.write("[SettingsStore] pushConfigToProvider: resolveConfig returned nil (activeProvider=custom but URL or model is empty)")
+            return
+        }
+        Log.write("[SettingsStore] pushConfigToProvider: pushing model=\(newConfig.model) baseURL=\(newConfig.baseURL.absoluteString)")
         provider.updateConfig(newConfig)
     }
 
