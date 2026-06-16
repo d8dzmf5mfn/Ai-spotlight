@@ -60,7 +60,7 @@ public final class FileSystemProvider: SearchProvider, @unchecked Sendable {
         if let n = name, !n.isEmpty {
             // B4: escape single quotes in filename so the query stays valid.
             let escaped = n.replacingOccurrences(of: "'", with: "\\'")
-            parts.append("kMDItemDisplayName == '\(escaped)*'c")
+            parts.append("kMDItemDisplayName == '*\(escaped)*'")
         }
         if let d = date {
             let seconds: Int = switch d {
