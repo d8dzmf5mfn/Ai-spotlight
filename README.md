@@ -163,3 +163,9 @@ Produces `build/AI-Spotlight-v0.6.0.dmg` — a drag-to-Applications installer
 ## License
 
 MIT
+
+## Project notes
+
+- **LLM-assisted development.** This project is edited with AI coding assistants. Sessions can be interrupted or wiped at any time, so the workflow is: commit early, commit often, and run `./scripts/snapshot.sh` at the end of every session. See [`docs/WORKFLOW.md`](docs/WORKFLOW.md) for the full convention.
+- **DMG is local-only.** `build/*.dmg` is gitignored and never published. The script is provided for personal redistribution; ad-hoc signing only, no notarization.
+- **AI tooling folder.** The `.hermes/` directory at the repo root is per-machine LLM tooling (skills, debug notes). It is intentionally uncommitted.
