@@ -22,10 +22,13 @@ AI Spotlight replaces Spotlight with a natural-language interface. You describe 
 ## Features
 
 - **AI Native Search** — describe what you want, not what it's named
-- **Bring Your Own AI** — 14 presets: OpenAI, DeepSeek, Groq, OpenRouter, Anthropic (via OpenRouter), Zhipu, Moonshot, DashScope, Doubao, Hunyuan, SiliconFlow + Ollama + LM Studio
-- **Dynamic model discovery** — picks model from `GET /v1/models` automatically
+- **Bring Your Own AI** — 14 presets: OpenAI, DeepSeek, Groq, OpenRouter, Anthropic (via OpenRouter), Zhipu, Moonshot, DashScope, Doubao, Hunyuan, SiliconFlow + Ollama + LM Studio + Custom
+- **Dynamic model discovery** — picks model from `GET /v1/models` automatically (Picker UI)
 - **Local First** — Ollama works offline, zero API key needed
-- **Tool calling** — LLM can search, open, and list files (3 built-in tools)
+- **Tool calling** — LLM can search, open, read, and list files, run shell commands, and access clipboard (7 built-in tools with consent gate)
+- **4-step connection diagnostic** — pinpoint exactly which of URL / API key / Model / Inference failed
+- **Memory layer** — remembers recent files, searches, and apps across sessions
+- **User consent dialog** — destructive tools (shell, read_file, clipboard_set) require Allow/Deny
 - **macOS Spotlight integration** — borrows Apple's index (0 RSS overhead, 200k+ files)
 
 ## Architecture
@@ -93,13 +96,17 @@ open build/AI\ Spotlight.app
 
 ## Tool calling
 
-The LLM can call 3 built-in tools:
+The LLM can call 7 built-in tools. Destructive tools (run_shell, read_file, clipboard_set) require a consent dialog — the user must click Allow before execution.
 
-| Tool | Command | Description |
+| Tool | Command / API | Consent |
 |---|---|---|
-| `search_files` | `mdfind` | Search files by name or content via macOS Spotlight |
-| `open_file` | `open <path>` | Open file/app with system default handler |
-| `list_apps` | `ls /Applications` | List installed applications |
+| `search_files` | `mdfind` via Process | ❌ |
+| `open_file` | `open <path>` via NSWorkspace | ❌ |
+| `list_apps` | `ls /Applications` via Process | ❌ |
+| `run_shell` | `/bin/sh -c` via Process | ✅ |
+| `read_file` | FileHandle.read (up to 64KB) | ✅ |
+| `clipboard_get` | NSPasteboard.general.string | ❌ |
+| `clipboard_set` | NSPasteboard.general.setString | ✅ |
 
 Tool calling uses a system-role prompt with explicit rules:
 - Call **at most one** tool per question
