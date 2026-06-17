@@ -52,6 +52,12 @@ AI Spotlight replaces Spotlight with a natural-language interface. You describe 
 
 ## Quickstart
 
+### Download a pre-built release (recommended)
+
+[Download the latest release](https://github.com/d8dzmf5mfn/Ai-spotlight/releases/latest) (ad-hoc signed, not notarized — see [Project notes](#project-notes) for the Gatekeeper bypass).
+
+### Or build from source
+
 ```bash
 # Clone and build
 git clone https://github.com/d8dzmf5mfn/Ai-spotlight.git
