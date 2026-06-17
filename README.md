@@ -116,19 +116,20 @@ Tool calling uses a system-role prompt with explicit rules:
 
 | Metric | Value |
 |---|---|
-| Commits | 55 |
-| Tests | 149/152 (3 pre-existing) |
+| Tests | 172/172 passing (0 failures) |
 | App RSS (idle) | ~35 MB |
-| Search provider | macOS Spotlight MDQuery |
+| Search providers | FileSystem + Content + Apps (MDQuery / Spotlight), per-provider weighted ranking |
 | LLM support | 14 presets + custom |
 | Hotkey | ⌘+Space (requires Accessibility) |
+
+> *Test count and search-provider notes updated 2026-06-17. The older "55 commits, 149/152 tests" figures are stale.* See [`docs/AUDIT_2026-06-17.md`](docs/AUDIT_2026-06-17.md) and [`docs/PROJECT_PLAN.md`](docs/PROJECT_PLAN.md) for the current roadmap.
 
 ## Known issues
 
 1. **Tool calling loop with DeepSeek** — occasionally calls multiple tools before answering. Set `maxToolTurns: 2` in `LLMConversationService` if it loops.
-2. **2 QueryInterpreter test failures** — pre-existing, disabled AI router.
-3. **Ollama idle unload** — 5-minute default. Run `launchctl setenv OLLAMA_KEEP_ALIVE 24h && killall ollama && open -a Ollama`.
-4. **Large model OOM** — models ≥7B may crash Ollama on 16GB Macs. Use gemma2:2b or qwen2.5:3b.
+2. **Ollama idle unload** — 5-minute default. Run `launchctl setenv OLLAMA_KEEP_ALIVE 24h && killall ollama && open -a Ollama`.
+3. **Large model OOM** — models ≥7B may crash Ollama on 16GB Macs. Use gemma2:2b or qwen2.5:3b.
+4. **LLMIntentRouter disabled by default** — see commit history. Each keystroke would otherwise fire a separate LLM call (Phase 4.2.5 decision). LLM is still active via the `askWithTools` path on Enter. See `Sources/AISpotlight/main.swift:124` for the wiring point.
 
 ## Building from source
 
