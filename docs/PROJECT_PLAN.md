@@ -265,6 +265,28 @@ features, cross-session tracking.
   (Step-2, see `docs/SEARCH_BACKEND.md` §5.4)
 - `Indexing Boundary` `Set<URL>` persistence format (Step-2)
 
+### TODO-9: Define AI engagement level in QueryInterpreter pipeline
+
+- **What:** AI router is currently disabled (intentional, Phase 4.2.5). Three product modes are possible:
+  - **Lazy (current):** LLM only on Enter via `runLLMAsk`. Deterministic rule-based routing. Zero keystroke latency.
+  - **Hybrid:** rule-based first; LLM only for `.unknown` or ambiguous queries.
+  - **Eager (historical README vision):** LLM on every keystroke via `LLMIntentRouter`. Highest intelligence, highest cost, highest latency.
+- **Why deferred:** current focus is "stabilize Query/Search first, then AI". This is intentionally postponed per user 2026-06-17.
+- **Status:** PENDING. Decision deferred until search backend (TODO-8) and ranking contract (TODO-11) are stable.
+
+### TODO-10: Verify §11.1 AppState god-object hypothesis
+
+- **What:** `docs/AUDIT_2026-06-17.md` §11.1 claims `AppState` (853 lines) is a god object with 10 responsibilities, untested, with load-bearing singleton assumption. The "10 responsibilities" count is **derived from public method count**, not from a real coupling analysis. Treat as **hypothesis**, not fact, until verified.
+- **What verification looks like:** read `AppState.swift` §168–225 (init) and §331–360 (runLLMAsk header). Determine whether the 10 "responsibilities" are *coupled* (cross-domain side-effect entanglement) or *layered* (small but with clear boundaries).
+- **Status:** PENDING verification. Audit committed 2026-06-17 without this verification.
+
+### TODO-11: Define ranking contract (normalization layer for inter-provider score compatibility)
+
+- **What:** `docs/AUDIT_2026-06-17.md` §11.2 verified that `FileSystemProvider` (score 0..20), `ContentSearchProvider` (100..120, +100 base), and `AppProvider` (10 or 100, prefix-boost) all assign scores on **incompatible scales**. `ResultMerger.merge()` sorts them as if directly comparable. The system works today only because most queries hit one provider. Multi-provider queries (rare but real) produce unpredictable ranking.
+- **What a contract looks like (sketch, not implementation):** every `SearchProvider` returns a score in a normalized space (e.g. `[0, 1]`); `ResultMerger` operates on normalized scores. The `ContentSearch` +100 base and `AppProvider` prefix +100 are *semantic signals* (content > filename, prefix > substring), not raw score boosts; they should be expressed as per-bucket weights, not per-result score offsets.
+- **Why this blocks Step-2 / Step-3:** adding a fourth provider (SQLite augmentation) to a fan-out that is already broken by score-scale mismatch silently compounds the bug. Defining the contract is a prerequisite to safely adding more providers.
+- **Status:** PENDING. Design and implementation deferred to a later session.
+
 ---
 
 ## Read order for LLM context recovery
