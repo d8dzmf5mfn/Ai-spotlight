@@ -6,10 +6,15 @@ import Foundation
 ///
 /// Phase 6 Step-1.5 (ranking stabilization): added so the merger
 /// can apply a weight per source. See TODO-11 in PROJECT_PLAN.md.
+///
+/// Phase 6 Step-3 (search backend integration): added
+/// `.sqliteAugmentation` for the optional SQLite FTS5 backend.
+/// See TODO-8 in PROJECT_PLAN.md.
 public enum ProviderID: String, Sendable, Equatable {
     case fileSystem
     case contentSearch
     case app
+    case sqliteAugmentation
 }
 
 public struct SearchResult: Identifiable, Equatable, Sendable {

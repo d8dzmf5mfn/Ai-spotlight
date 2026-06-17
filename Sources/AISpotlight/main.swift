@@ -198,11 +198,23 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
             Log.write("tool registry: 3 tools registered")
         }
 
-let orchestrator = SearchOrchestrator(providers: [
-            FileSystemProvider(),
-            AppProvider(),
-            contentProvider,
-        ])
+// Phase 6 Step-3: the SQLite augmentation backend is added to
+// the provider list when `settings.useSQLiteAugmentation` is true.
+// Today the backend's `search()` is a no-op (returns []) and its
+// provider weight in `ResultMerger` is 0, so the flag has no
+// observable effect on results. The wiring exists so that
+// Step-3's FTS5 query implementation lands in an already-wired
+// pipeline.
+var searchProviders: [any SearchProvider] = [
+    FileSystemProvider(),
+    AppProvider(),
+    contentProvider,
+]
+if settings.useSQLiteAugmentation {
+    searchProviders.append(SQLiteBackend())
+}
+
+let orchestrator = SearchOrchestrator(providers: searchProviders)
         state = AppState(interpreter: interpreter, orchestrator: orchestrator, llmService: llmService, toolRegistry: toolRegistry)
 
         // Start indexing in the background after a short delay
