@@ -258,12 +258,18 @@ and any future per-user table MUST stay narrowly scoped.
 Forbidden: personalization, implicit feedback, ML-derived
 features, cross-session tracking.
 
-**Open items (not in Step-1):**
+**Open items (not in Step-1, 2026-06-17 update):**
 - `HybridBackend` shape (Step-3)
 - Score fusion math (Step-3)
-- FSEvents actor wrapping for Swift 6.4 strict-concurrency
-  (Step-2, see `docs/SEARCH_BACKEND.md` §5.4)
+- ~~FSEvents actor wrapping for Swift 6.4 strict-concurrency
+  (Step-2, see `docs/SEARCH_BACKEND.md` §5.4)~~ **RESOLVED 2026-06-17**
+  by linking spike: SwiftPM on this toolchain auto-links
+  `libsqlite3.tbd`. `import SQLite3` works in any target without
+  linkerSettings or systemLibrary wrapping.
 - `Indexing Boundary` `Set<URL>` persistence format (Step-2)
+- `SQLiteBackend` schema migration (Step-2 — was deferred from
+  Step-1 by the anti-inflation rule; see `docs/STEP1_PLAN.md`
+  §1.1 and §6)
 
 ### TODO-9: Define AI engagement level in QueryInterpreter pipeline
 

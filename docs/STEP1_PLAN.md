@@ -54,9 +54,10 @@ code-review blocker:
 
 If you find yourself wanting to add `import SQLite3`,
 `FileManager.createDirectory`, or a schema DDL string to this
-file, **stop**. That is Step-2 work, and Step-2 starts with its
-own discrete task: solving the SwiftPM + libsqlite3 system
-library linking question (see Step-2 below).
+file, **stop**. That is Step-2 work. (Note: the linking concern
+that originally delayed Step-2 was resolved by the 2026-06-17
+spike — see §6 below. Step-2's blocking item is now design,
+not linking.)
 
 ### 1.2 `Sources/AISpotlightKit/Search/SearchConfig.swift` (new, ≤ 25 lines)
 
@@ -118,7 +119,7 @@ they're tempting:
 | How to wire `SQLiteBackend` into `SearchOrchestrator` | Step-2 (or later) | `SearchOrchestrator` change is a runtime integration; Step-1 is type-only |
 | How `useSQLiteAugmentation` is read at runtime | Step-3 | No need to read it before SQLite actually has data |
 | `HybridBackend` shape | Step-3 | Can't design merge without knowing both backends' output shapes |
-| **SwiftPM + libsqlite3 system library linking** | **Step-2 (first task)** | Naïve `linkerSettings: [.linkedLibrary("sqlite3")]` does not work on this toolchain. Step-2 must solve the linking question (likely via `systemLibrary` target + module map) **before** any `import SQLite3` can land. Step-1 explicitly avoids this. |
+| ~~**SwiftPM + libsqlite3 system library linking**~~ | ~~**Step-2 (first task)**~~ | **RESOLVED 2026-06-17 by linking spike at `/tmp/sqlite-linking-spike` (now deleted):** SwiftPM on this toolchain (Swift 5.9, macOS 14+ SDK) auto-links the system `libsqlite3.tbd`. A minimal `import SQLite3` + `sqlite3_open` + `sqlite3_exec` + `sqlite3_close` program ran cleanly with **no `linkerSettings`, no `systemLibrary` target, no module map**. The earlier `linkedLibrary("sqlite3")` failure was likely a transient toolchain / build-cache issue (or my misreading of the error). Step-2 does not need to solve linking — it can proceed directly to schema migration + DB lifecycle code. |
 | Schema migration (DDL strings) | Step-2 | Tied to linking — can't write schema without `import SQLite3` working |
 | `user_signals` table creation | Step-2 | Tied to schema migration |
 | `user_signals` writes | Step-2 or later | Only after table exists |
