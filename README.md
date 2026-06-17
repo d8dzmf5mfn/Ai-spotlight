@@ -5,6 +5,7 @@
 [![Platform](https://img.shields.io/badge/platform-macOS_15+-blue)](https://github.com/d8dzmf5mfn/Ai-spotlight)
 [![Swift](https://img.shields.io/badge/swift-6.4-orange)](https://swift.org)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/d8dzmf5mfn/Ai-spotlight)](https://github.com/d8dzmf5mfn/Ai-spotlight/releases/latest)
 
 ---
 
@@ -168,5 +169,5 @@ MIT
 ## Project notes
 
 - **LLM-assisted development.** This project is edited with AI coding assistants. Sessions can be interrupted or wiped at any time, so the workflow is: commit early, commit often, and run `./scripts/snapshot.sh` at the end of every session. See [`docs/WORKFLOW.md`](docs/WORKFLOW.md) for the full convention.
-- **DMG is local-only.** `build/*.dmg` is gitignored and never published. The script is provided for personal redistribution; ad-hoc signing only, no notarization.
+- **DMG on GitHub Releases (ad-hoc, not notarized).** The v0.6.0 `.dmg` is published as a GitHub Release. Because the binary is **ad-hoc signed only** (no Apple Developer ID, no notarization), first launch on macOS Sonoma or later will trigger Gatekeeper's "cannot verify developer" warning. Users must either right-click → Open, or run `xattr -d com.apple.quarantine /Applications/AI\ Spotlight.app` after install. See the Releases page for download.
 - **AI tooling folder.** The `.hermes/` directory at the repo root is per-machine LLM tooling (skills, debug notes). It is intentionally uncommitted.
