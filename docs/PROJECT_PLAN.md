@@ -274,11 +274,13 @@ features, cross-session tracking.
 - **Why deferred:** current focus is "stabilize Query/Search first, then AI". This is intentionally postponed per user 2026-06-17.
 - **Status:** PENDING. Decision deferred until search backend (TODO-8) and ranking contract (TODO-11) are stable.
 
-### TODO-10: Verify §11.1 AppState god-object hypothesis
+### TODO-10: Verify §11.1 AppState god-object hypothesis — DONE 2026-06-17 (reframed as MEDIUM)
 
-- **What:** `docs/AUDIT_2026-06-17.md` §11.1 claims `AppState` (853 lines) is a god object with 10 responsibilities, untested, with load-bearing singleton assumption. The "10 responsibilities" count is **derived from public method count**, not from a real coupling analysis. Treat as **hypothesis**, not fact, until verified.
-- **What verification looks like:** read `AppState.swift` §168–225 (init) and §331–360 (runLLMAsk header). Determine whether the 10 "responsibilities" are *coupled* (cross-domain side-effect entanglement) or *layered* (small but with clear boundaries).
-- **Status:** PENDING verification. Audit committed 2026-06-17 without this verification.
+- **What:** Verify whether `AppState` is a god object (entangled responsibilities) or a cohesive wide class (layered responsibilities).
+- **Outcome:** Cohesive wide class, not a god object. Audit §11.1 header + verdict section revised. Severity downgraded from HIGH to MEDIUM.
+- **Layering evidence (verified):** 3 orchestration methods are sole writers of `@Published`; static mutable state limited to 1 field with 2 readers; cross-responsibility coupling narrow and unidirectional; `@MainActor` enforces serialization.
+- **Still missing:** 0 tests directly covering `AppState`. Layering argument shows *current* structure is not broken; tests are warranted to *prevent* future breakage (TODO-10 now subsumes "add AppState tests" as a follow-up).
+- **Status:** ✅ Verified and recorded in audit §11.1 (commit 0bd1cc5 readme fix is independent; this TODO was verified against HEAD before that).
 
 ### TODO-11: Define ranking contract (normalization layer for inter-provider score compatibility)
 
