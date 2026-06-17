@@ -4,7 +4,8 @@ set -euo pipefail
 
 APP_NAME="AI Spotlight"
 APP_BUNDLE="build/${APP_NAME}.app"
-DMG_NAME="AI-Spotlight-Installer.dmg"
+# v0.6.0: versioned DMG. Old installer kept as AI-Spotlight-Installer.dmg
+DMG_NAME="AI-Spotlight-v0.6.0.dmg"
 STAGING_DIR="/tmp/aispotlight-dmg-staging"
 
 # Build if needed
@@ -35,7 +36,7 @@ rm -f "$DMG_NAME"
 
 # Create the DMG
 hdiutil create \
-    -volname "AI Spotlight" \
+    -volname "AI Spotlight v0.6.0" \
     -srcfolder "$STAGING_DIR" \
     -ov -format UDZO \
     -size 200m \

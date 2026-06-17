@@ -144,6 +144,22 @@ open build/AI\ Spotlight.app
 
 The build produces a standalone `.app` bundle in `build/`. No Xcode project needed.
 
+## Distribution (DMG)
+
+Build a redistributable DMG after `./scripts/make_app.sh`:
+
+```bash
+./scripts/make_dmg.sh
+```
+
+Produces `build/AI-Spotlight-v0.6.0.dmg` — a drag-to-Applications installer
+(volname `AI Spotlight v0.6.0`).
+
+**Notes:**
+- Version is **hardcoded to v0.6.0** in `scripts/make_dmg.sh`. Bump `DMG_NAME` and `-volname` when cutting a new release.
+- DMG is **ad-hoc signed only** (inherited from `make_app.sh`), not notarized. First launch requires right-click → Open to bypass Gatekeeper.
+- `build/AI-Spotlight-Installer.dmg` is a pre-v0.6.0 artifact; the current script no longer generates it.
+
 ## License
 
 MIT
