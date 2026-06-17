@@ -33,51 +33,53 @@ code-review blocker:
 
 ## 1. New files (≤ 4)
 
-### 1.1 `Sources/AISpotlightKit/Search/SearchBackend.swift` (new, ≤ 50 lines)
+### 1.3 New files (≤ 3) — REVISED 2026-06-17
 
-```swift
-// Signature only — implementation is empty stubs.
-public protocol SearchBackend: Sendable {
-    var name: String { get }
-    func search(intent: Intent, limit: Int) async -> [SearchResult]
-}
-```
+> **Revision note (2026-06-17):** Originally this plan listed
+> 4 files including `MDQueryBackend.swift`. During implementation
+> it became clear that `ContentSearchProvider` already conforms
+> to `SearchProvider` directly — there is no need for a wrapper
+> backend. The `SearchBackend` protocol was also dropped because
+> it duplicated `SearchProvider`. The final Step-1 file count
+> is **3**, not 4.
 
-This is the **only** new protocol in Step-1. `SearchProvider`
-(the existing protocol in `Sources/AISpotlightKit/Providers/SearchProvider.swift`)
-stays untouched.
+### 1.1 `Sources/AISpotlightKit/Search/SQLiteBackend.swift` (new, ≤ 50 lines)
 
-### 1.2 `Sources/AISpotlightKit/Search/MDQueryBackend.swift` (new, ≤ 80 lines)
+- A `SearchProvider` conformance that does **nothing** at runtime.
+- `init()` body is intentionally empty.
+- `search(intent:limit:)` returns `[]` always.
+- **No** `import SQLite3`. **No** file I/O. **No** schema
+  migration. **No** `databaseURL` static property. Step-1 is
+  type-only. Runtime wiring lands in Step-2.
 
-A thin wrapper around the current `ContentSearchProvider`. The
-goal is to make `ContentSearchProvider` conform to
-`SearchBackend` without modifying `ContentSearchProvider`
-itself.
+If you find yourself wanting to add `import SQLite3`,
+`FileManager.createDirectory`, or a schema DDL string to this
+file, **stop**. That is Step-2 work, and Step-2 starts with its
+own discrete task: solving the SwiftPM + libsqlite3 system
+library linking question (see Step-2 below).
 
-If wrapper-by-inheritance or wrapper-by-composition turns out
-ugly, defer to Step-1.1 (see §3) instead of growing this file.
-
-### 1.3 `Sources/AISpotlightKit/Search/SQLiteBackend.swift` (new, ≤ 80 lines)
-
-- Hardcoded DB path:
-  `~/Library/Application Support/AISpotlight/search_augment.sqlite`
-- `init()` opens the DB, runs schema migration if first launch
-- `search(intent:limit:)` returns empty `[]` always (no data
-  writes yet; no FTS5 queries yet)
-- Documented in the file's header comment: "Step-1 stub; query
-  implementation lands in Step-3 merge layer."
-
-### 1.4 `Sources/AISpotlightKit/Search/SearchConfig.swift` (new, ≤ 40 lines)
+### 1.2 `Sources/AISpotlightKit/Search/SearchConfig.swift` (new, ≤ 25 lines)
 
 ```swift
 public struct SearchConfig: Sendable {
-    public var useSQLiteAugmentation: Bool = false
-    public init() {}
+    public var useSQLiteAugmentation: Bool
+    public init(useSQLiteAugmentation: Bool = false) {
+        self.useSQLiteAugmentation = useSQLiteAugmentation
+    }
 }
 ```
 
 No other config fields in Step-1. Weights, boost constants, etc.
 arrive in Step-3.
+
+### 1.3 `Tests/AISpotlightKitTests/SQLiteBackendTests.swift` (new, ≤ 50 lines)
+
+Three conformance / smoke tests:
+
+- `testSQLiteBackend_conformsToSearchProvider` — cast works
+- `testSQLiteBackend_searchReturnsEmptyInStep1` — search returns `[]`
+- `testSQLiteBackend_initDoesNotCrash` — guards against future
+  regression where someone adds file I/O to `init()`
 
 ---
 
@@ -91,16 +93,15 @@ That's the point. Step-1 is purely additive. `ContentSearchProvider`,
 If you find yourself wanting to modify any of these, stop. That
 is Step-2 or later.
 
-### 2.2 `Tests/AISpotlightKitTests/SearchBackendProtocolTests.swift` (new, ≤ 50 lines)
+### 2.2 `Tests/AISpotlightKitTests/SQLiteBackendTests.swift` (new, ≤ 50 lines)
 
-A single conformance test:
+Three conformance / smoke tests (added in this commit, replacing
+the originally-planned single `testMDQueryBackend_conformsToSearchBackend`):
 
-```swift
-func testMDQueryBackend_conformsToSearchBackend() {
-    let backend: SearchBackend = MDQueryBackend()
-    // assert it accepts the protocol and returns [SearchResult]
-}
-```
+- `testSQLiteBackend_conformsToSearchProvider` — protocol cast works
+- `testSQLiteBackend_searchReturnsEmptyInStep1` — search returns `[]`
+- `testSQLiteBackend_initDoesNotCrash` — guards against future
+  regression where someone adds file I/O to `init()`
 
 That's it. No round-trip SQLite tests in Step-1 (those are
 Step-3 with the merge engine).
@@ -114,11 +115,13 @@ they're tempting:
 
 | Decision | Deferred to | Why |
 |---|---|---|
-| How to wire `SearchBackend` into `SearchOrchestrator` | Step-2 (or later) | `SearchOrchestrator` change is a runtime integration; Step-1 is type-only |
+| How to wire `SQLiteBackend` into `SearchOrchestrator` | Step-2 (or later) | `SearchOrchestrator` change is a runtime integration; Step-1 is type-only |
 | How `useSQLiteAugmentation` is read at runtime | Step-3 | No need to read it before SQLite actually has data |
 | `HybridBackend` shape | Step-3 | Can't design merge without knowing both backends' output shapes |
-| Schema migration versioning | Step-2 | One migration is fine for v1 |
-| `user_signals` writes | Step-2 or later | Step-1 only creates the empty table |
+| **SwiftPM + libsqlite3 system library linking** | **Step-2 (first task)** | Naïve `linkerSettings: [.linkedLibrary("sqlite3")]` does not work on this toolchain. Step-2 must solve the linking question (likely via `systemLibrary` target + module map) **before** any `import SQLite3` can land. Step-1 explicitly avoids this. |
+| Schema migration (DDL strings) | Step-2 | Tied to linking — can't write schema without `import SQLite3` working |
+| `user_signals` table creation | Step-2 | Tied to schema migration |
+| `user_signals` writes | Step-2 or later | Only after table exists |
 | FSEvents / debounce / batch writes | Step-2 | Hard constraint #2 |
 | Score fusion math | Step-3 | Hard constraint #3 |
 | Indexing Boundary (`Set<URL>`) persistence | Step-2 | Tied to FSEvents scope |
@@ -156,11 +159,64 @@ One commit. Message: `feat(phase6-step1): SearchBackend protocol + MDQuery/SQLit
 - Step-1 does **not** change user-facing behavior. If a user
   installs the Step-1 build, nothing about their search
   experience changes.
-- Step-1 does **not** introduce a SQLite write path. The DB file
-  gets created on first launch, but stays empty.
+- Step-1 does **not** create a SQLite file. The DB file creation
+  is Step-2 work, gated on solving the SwiftPM + libsqlite3
+  linking question.
 - Step-1 does **not** prove the architecture works. Step-3 is
   where the merge engine proves it.
 
 If you want a working hybrid, you have to ship Step-1, Step-2,
 Step-3, and Step-4. That's the price of the anti-inflation
 constraint.
+
+---
+
+## 6. Implementation outcome (Step-1, 2026-06-17)
+
+The commit implementing this plan differs from the original
+plan above. Recorded so the next session can reconstruct what
+was actually built vs. originally envisioned.
+
+- **Files added:** 3
+  - `Sources/AISpotlightKit/Search/SQLiteBackend.swift`
+  - `Sources/AISpotlightKit/Search/SearchConfig.swift`
+  - `Tests/AISpotlightKitTests/SQLiteBackendTests.swift`
+- **Files modified:** 0 (no changes to `ContentSearchProvider`,
+  `SearchOrchestrator`, `AppState`, `main.swift`, `Package.swift`)
+- **Test result:** 171/171 pass (3 new + 168 existing, 0 regressions)
+- **Build:** clean, ~11s
+- **Runtime behavior:** unchanged. `SQLiteBackend` exists but
+  is never invoked by any production code path.
+
+### Key course corrections during implementation
+
+1. **`SearchBackend` protocol removed.** Originally the plan
+   proposed a new `SearchBackend` protocol wrapping
+   `SearchProvider`. Inspection of existing code showed
+   `SearchProvider` already had the right shape and
+   `ContentSearchProvider` already conformed — adding
+   `SearchBackend` was pure indirection. Decision: reuse
+   `SearchProvider`, drop `SearchBackend`.
+2. **`MDQueryBackend` removed.** Originally the plan proposed
+   a thin wrapper to expose `ContentSearchProvider` under the
+   new protocol. With `SearchBackend` gone, the wrapper was
+   pointless — `ContentSearchProvider` already conforms to
+   `SearchProvider` directly. Decision: no wrapper.
+3. **`SQLiteBackend.init()` emptied.** Originally the plan had
+   `init()` running schema migration. Implementation hit
+   SwiftPM + libsqlite3 linking issues — `linkerSettings:
+   [.linkedLibrary("sqlite3")]` does not produce a working
+   build on this toolchain. Decision: remove all `import SQLite3`
+   from Step-1 entirely; defer both the linking question and
+   the schema migration to Step-2. This is a scope correction,
+   not a fallback — Step-1 is explicitly type-only, and Step-2
+   owns SQLite runtime.
+
+### Lesson recorded (in this plan, not memory)
+
+> **Do not introduce runtime dependencies during abstraction
+> scaffolding phases.** A "Step-1" or "foundation" phase that
+> introduces runtime behavior (file I/O, DB creation, schema
+> migration, network calls) before the architecture is stable
+> is a scope misplacement, not an early optimization. The
+> fix is to ship a no-op type first and defer runtime wiring.
