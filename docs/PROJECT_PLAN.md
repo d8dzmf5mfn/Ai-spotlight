@@ -216,24 +216,69 @@ convention is `<major>.<minor>.<patch>` and `<major>-<letter>`.
 - **Status:** Not adopted. Current numbering follows `git log`.
   Re-tag the entire history is out of scope.
 
-### TODO-8: SQLite FTS5 backend (deferred)
-- **What:** Migrate `IndexStore` from JSON to SQLite FTS5. Current
-  implementation uses JSON; documented in `.hermes/3.1.5-perf-root-cause.md`
-  as adequate for the prototype but not scalable past ~100k files.
-- **Owner:** Open
-- **Status:** Not started. Trigger when ingest corpus > 100k files
-  or first RSS > 1GB on a clean ingest.
+### TODO-8: Search backend augmentation (REDEFINED, 2026-06-17 — active direction)
+
+> **Status:** Active direction, not a "PENDING decision". Spec
+> landed in `docs/SEARCH_BACKEND.md` (2026-06-17). Step-1 plan
+> landed in `docs/STEP1_PLAN.md`. Step-1 is a thin foundation;
+> the architecture is a 4-step rollout.
+
+**Direction (locked 2026-06-17):** Hybrid (Option A).
+- **MDQuery** = authoritative global source
+- **SQLite FTS5** (`~/Library/Application Support/AISpotlight/search_augment.sqlite`)
+  = augmentation layer only, scoped by an **Indexing Boundary**
+  (not full-disk crawl)
+- **SearchBackend protocol** = the Step-1 abstraction shape
+  (not inner field, not Decorator)
+- **Hard boundary:** no rebuild of Spotlight, no full content
+  indexing, no replacement of MDQuery
+
+**Sub-steps:**
+
+- **Step 1 — Foundation Layer** (plan in `docs/STEP1_PLAN.md`):
+  `SearchBackend` protocol + `MDQueryBackend` + empty
+  `SQLiteBackend` + `useSQLiteAugmentation = false` flag.
+  Additive only. ≤ 4 new files, ≤ 250 lines. No runtime
+  integration.
+- **Step 2 — Sync Layer:** FSEvents → debounce → SQLite pipeline,
+  Indexing Boundary persistence. Sync writes only; queries
+  still go through MDQuery.
+- **Step 3 — Merge Layer:** Score fusion, dedup, HybridBackend
+  route decision. Real test coverage of merge math.
+- **Step 4 — Activation:** Flip `useSQLiteAugmentation = true`,
+  monitor RSS / latency, tune weights, consider removing flag
+  after 1 week of clean metrics.
+
+**Anti-inflation rule:** if Step-1 grows beyond the
+≤ 4 files / ≤ 250 lines bound, it has failed. Stop and ask.
+
+**Architectural review:** the §4.4 "scope discipline" clause
+in `docs/SEARCH_BACKEND.md` is non-negotiable — `user_signals`
+and any future per-user table MUST stay narrowly scoped.
+Forbidden: personalization, implicit feedback, ML-derived
+features, cross-session tracking.
+
+**Open items (not in Step-1):**
+- `HybridBackend` shape (Step-3)
+- Score fusion math (Step-3)
+- FSEvents actor wrapping for Swift 6.4 strict-concurrency
+  (Step-2, see `docs/SEARCH_BACKEND.md` §5.4)
+- `Indexing Boundary` `Set<URL>` persistence format (Step-2)
 
 ---
 
-## 5. Read order for LLM context recovery
+## Read order for LLM context recovery
 
 If you (or a future LLM session) are picking this project up cold:
 
 1. `README.md` — what the app is, how to build
 2. `docs/WORKFLOW.md` — session safety / commit discipline
-3. `docs/PROJECT_PLAN.md` (this file) — phases shipped, what's open
-4. `.hermes/3.1-verification-report-v2.md` — content search postmortem
-5. `.hermes/4.7-architecture-redesign.md` — provider refactor self-critique
-6. `.hermes/5.0-governor-401-issue/` — current bug investigation notes
-7. `git log --oneline` — full history
+3. `docs/PROJECT_PLAN.md` — phases shipped, what's open
+4. `docs/SEARCH_BACKEND.md` — active TODO-8 architecture spec
+   (Hybrid: MDQuery + SQLite FTS5)
+5. `docs/STEP1_PLAN.md` — Step-1 implementation task list
+   (read this BEFORE writing any code for Step-1)
+6. `.hermes/3.1-verification-report-v2.md` — content search postmortem
+7. `.hermes/4.7-architecture-redesign.md` — provider refactor self-critique
+8. `.hermes/5.0-governor-401-issue/` — current bug investigation notes
+9. `git log --oneline` — full history
