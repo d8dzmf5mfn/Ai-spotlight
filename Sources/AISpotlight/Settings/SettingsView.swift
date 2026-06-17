@@ -13,19 +13,6 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            // Phase 6 (b2): top-level visual grouping. Each `Group`
-            // wraps one or more related Section(s) under a header
-            // so the Settings window no longer reads as one long
-            // undifferentiated list of sections. The header Text
-            // is intentionally rendered above the Section's own
-            // header — Apple's Form section header remains
-            // visible inside the card so each Section remains
-            // self-describing.
-            Group {
-                Text("AI Assistant")
-                    .font(.headline)
-                    .padding(.top, 4)
-
             Section("AI Provider") {
                 Picker("Provider", selection: $store.activeProvider) {
                     Text("None (rule-based only)").tag("none")
@@ -142,15 +129,8 @@ struct SettingsView: View {
                     // ModelDiscoveryService on preset change
                     // (see SettingsStore.applyPreset).
                     modelField
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("API key")
-                            .font(.subheadline)
-                        SecureField("leave blank for providers that don't require one",
-                                    text: $store.customAPIKey)
-                        Text("Leave blank for providers that don't require one.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    SecureField("API key (leave blank for providers that don't require one)",
+                                text: $store.customAPIKey)
                     // Phase 5-C: 4-step diagnostic replaces the
                     // single-line testResult UI. Each row shows
                     // ✓ / ⏳ / ✗ with a precise error message
@@ -158,12 +138,6 @@ struct SettingsView: View {
                     diagnosticView
                 }
             }
-            }  // end Group "AI Assistant"
-
-            Group {
-                Text("Search & Indexing")
-                    .font(.headline)
-                    .padding(.top, 8)
 
             Section("Content Index") {
                 // Phase 3.2.2: user picks which categories of files
@@ -176,28 +150,6 @@ struct SettingsView: View {
                 Toggle("Rich text & HTML", isOn: $store.indexRichTextFiles)
                     .help("RTF, HTML — parsed via NSAttributedString.")
             }
-
-            Section("Search Backend") {
-                // Phase 6 Step-3: the SQLite augmentation backend is
-                // wired into the SearchOrchestrator fan-out when
-                // this toggle is ON. Today the backend's `search()`
-                // is a no-op (returns []) and its provider weight
-                // is 0, so the toggle has no observable effect on
-                // results. It exists so the wiring point is in
-                // place when Step-3 ships the FTS5 query
-                // implementation.
-                Toggle("SQLite augmentation (experimental)",
-                       isOn: $store.useSQLiteAugmentation)
-                    .help("Add a SQLite-backed search provider to the fan-out. Currently a no-op stub; effective when Step-3 ships the FTS5 query implementation.")
-                Text("When enabled, a SQLite-backed search provider participates in the fan-out. Today it returns no results. The flag wires the toggle into the orchestrator so Step-3 can land its FTS5 query without further Settings changes.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            }  // end Group "Search & Indexing"
-
-            Group {
-                Text("Keyboard")
-                    .font(.headline)
-                    .padding(.top, 8)
 
             Section("Hotkey") {
                 KeyboardShortcuts.Recorder("Toggle AI Spotlight:",
@@ -234,7 +186,6 @@ struct SettingsView: View {
                      "→ Spotlight → uncheck \"Show Spotlight search\".")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            }  // end Group "Keyboard"
         }
         .padding(20)
         // Phase 4.6: the Settings UI grew with cloud-model
@@ -319,14 +270,10 @@ struct SettingsView: View {
                 || m.contains(":12b") || m.contains(":14b") || m.contains(":27b")
                 || m.contains(":30b") || m.contains(":70b")
         if risky {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                        .font(.caption)
-                    Text("Heads up")
-                        .font(.callout.bold())
-                }
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .font(.caption)
                 Text("Heads up: \(store.ollamaModel) needs ~2.5GB+ of RAM. On a 16GB Mac with AI Spotlight running, this can OOM. Try gemma2:2b or qwen2.5:3b.")
                     .font(.caption)
                     .foregroundStyle(.secondary)

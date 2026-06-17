@@ -74,18 +74,14 @@ public enum ResultMerger {
     ///   - a top `FileSystem` match (raw ~20) becomes weighted ~20
     ///   - a top `ContentSearch` match (raw ~120) becomes weighted ~144
     ///   - a top `AppProvider` prefix match (raw ~100+N) becomes weighted ~110
-    ///   - a `SQLiteAugmentation` match becomes weighted 0 (no-op
-    ///     until the FTS5 query implementation lands in Step-3)
-    ///
     /// This preserves the "content > filename > apps" intent that
     /// the +100 hard-coded boost encoded, but with a *tunable*
     /// surface instead of a hard-coded magic number.
     static func providerWeight(_ provider: ProviderID) -> Double {
         switch provider {
-        case .fileSystem:         return 1.0
-        case .contentSearch:       return 1.2
-        case .app:                 return 1.1
-        case .sqliteAugmentation:  return 0.0   // Step-3 stub; tune once FTS5 query lands
+        case .fileSystem:   return 1.0
+        case .contentSearch: return 1.2
+        case .app:          return 1.1
         }
     }
 }

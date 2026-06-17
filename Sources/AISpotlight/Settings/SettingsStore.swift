@@ -212,20 +212,6 @@ final class SettingsStore: ObservableObject {
         didSet { defaults.set(indexRichTextFiles, forKey: Self.kIndexRich) }
     }
 
-    // MARK: Phase 6 Step-3: search backend augmentation
-    /// Whether to include `SQLiteBackend` in the fan-out when
-    /// `SearchOrchestrator` runs. Default OFF. When OFF, the
-    /// orchestrator fans out to the original three providers
-    /// (FileSystem, Content, Apps). When ON, the orchestrator
-    /// also includes the SQLite augmentation backend; today the
-    /// backend's `search()` is a no-op (returns []) and its
-    /// provider weight is 0, so this flag has no observable
-    /// effect yet. The flag exists so that the wiring point is
-    /// in place when Step-3 ships the FTS5 query implementation.
-    @Published var useSQLiteAugmentation: Bool {
-        didSet { defaults.set(useSQLiteAugmentation, forKey: Self.kUseSQLite) }
-    }
-
     init(keychain: KeychainStoring = KeychainStore()) {
         self.keychain = keychain
         // user decision: open-box, no key needed by default
@@ -237,15 +223,10 @@ final class SettingsStore: ObservableObject {
         // Default both ON — zero-friction: the user opts out.
         self.indexCodeFiles = defaults.object(forKey: Self.kIndexCode) as? Bool ?? true
         self.indexRichTextFiles = defaults.object(forKey: Self.kIndexRich) as? Bool ?? true
-        // Default OFF — SQLite backend is a no-op stub today; the
-        // flag is wired up so Step-3's FTS5 query can flip it on
-        // without further wiring changes.
-        self.useSQLiteAugmentation = defaults.object(forKey: Self.kUseSQLite) as? Bool ?? false
     }
 
     private static let kIndexCode = "indexCodeFiles"
-    private static let kIndexRich = "indexTextFiles"
-    private static let kUseSQLite = "useSQLiteAugmentation"
+    private static let kIndexRich = "indexRichTextFiles"
 
     /// Resolve the active configuration into a concrete `AIConfig` value that
     /// the AIFactory can consume. `none` → nil (caller falls back to rules).

@@ -23,11 +23,10 @@ public final class SearchOrchestrator: @unchecked Sendable {
         let pairs: [(SearchProvider, ProviderID)] = providers.map { p in
             let id: ProviderID
             switch p.name {
-            case "FileSystem":       id = .fileSystem
-            case "Content":          id = .contentSearch
-            case "Apps":             id = .app
-            case "SQLiteAugmentation": id = .sqliteAugmentation
-            default:                 id = .fileSystem  // unknown provider → safest default
+            case "FileSystem":  id = .fileSystem
+            case "Content":     id = .contentSearch
+            case "Apps":        id = .app
+            default:            id = .fileSystem  // unknown provider → safest default
             }
             return (p, id)
         }
