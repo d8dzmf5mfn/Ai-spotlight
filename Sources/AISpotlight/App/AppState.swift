@@ -237,7 +237,10 @@ final class AppState: ObservableObject {
         }
 
         let intent = await interpreter.interpret(q)
-        let r = await orchestrator.run(intent: intent)
+        let buckets = await orchestrator.run(intent: intent)
+        // Phase 6 Step-1.5: orchestrator returns provider-tagged
+        // buckets; merger flattens and ranks with per-provider weight.
+        let r = ResultMerger.merge(buckets)
         if !Task.isCancelled {
             self.results = r
             self.selection = r.isEmpty ? nil : 0
