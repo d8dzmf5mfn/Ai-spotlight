@@ -31,10 +31,11 @@ public enum BuiltinTools {
     public static func searchFiles() -> LLMTool {
         return LLMTool(
             name: "search_files",
-            description: "Find files on the user's Mac by filename or by file contents. Returns paths.",
+            description: "Find files on the user's Mac by filename or by file contents. If the user has a specific folder in mind (e.g. 'my chemistry notes in Documents'), pass it as 'directory' to narrow the search. Returns paths.",
             parametersDescription: """
             - query (string, required): the search terms (e.g. "polyester", "report.pdf", "chemistry notes")
             - kind (string, optional): "name" to search filenames only, "content" to search file contents (default: "content")
+            - directory (string, optional): scope the search to this folder (e.g. "/Users/name/Documents"). Omit to search everywhere.
             - limit (int, optional): max results to return (default: 5, max: 20)
             """,
             requiresConsent: false
@@ -45,6 +46,7 @@ public enum BuiltinTools {
             let kind = (args["kind"] as? String) ?? "content"
             let limit = (args["limit"] as? Int) ?? 5
             let clampedLimit = min(max(limit, 1), 20)
+            let directory = args["directory"] as? String
 
             // Build the mdfind query.
             // For content search: kMDItemTextContent == "*query*"
@@ -61,9 +63,14 @@ public enum BuiltinTools {
                 throw ToolError.badArgs("search_files: 'kind' must be 'name' or 'content'")
             }
 
+            var mdfindArgs = [mdquery]
+            if let dir = directory, !dir.isEmpty {
+                mdfindArgs.insert(contentsOf: ["-onlyin", dir], at: 0)
+            }
+
             let result = try await ProcessRunner.run(
                 executable: "/usr/bin/mdfind",
-                arguments: [mdquery]
+                arguments: mdfindArgs
             )
             if result.exitCode != 0 {
                 throw ToolError.runtimeError(
