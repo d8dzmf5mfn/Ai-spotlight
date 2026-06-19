@@ -380,7 +380,7 @@ final class AppState: ObservableObject {
                         maxToolTurns: 2
                     ) { toolName in
                         // Phase 4.4: set the current tool name
-                        // so the UI can show a "🔧 using X..."
+                        // so the UI can show a "using X..." progress indicator
                         // progress indicator. Cleared when the
                         // loop returns (or the catch block fires).
                         await MainActor.run {
@@ -403,7 +403,7 @@ final class AppState: ObservableObject {
                     await MainActor.run {
                         guard self.llmGeneration == currentGeneration else { return }
                         self.toolTrace = result.toolCalls.map { call in
-                            "🔧 \(call.tool): \(call.summary)"
+                            "\(call.tool): \(call.summary)"
                         }
                         self.llmReply = result.finalAnswer
                         // Phase 4.4: extract any file paths the LLM

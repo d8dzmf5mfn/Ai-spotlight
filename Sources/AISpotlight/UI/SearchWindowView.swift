@@ -265,10 +265,9 @@ private struct LLMReplyView: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 14))
                     .foregroundStyle(.red.opacity(0.7))
-                Text(err)
+                Text("出错了")
                     .font(.system(size: 13))
                     .foregroundStyle(.red.opacity(0.85))
-                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if let kind = state.llmErrorKind, Self.shouldShowStartOllamaButton(kind) {

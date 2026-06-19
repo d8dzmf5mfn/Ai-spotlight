@@ -513,9 +513,9 @@ struct SettingsView: View {
     private func verdictIcon(_ v: ConnectionDiagnosticService.Verdict) -> String {
         switch v {
         case .pending: return "○"
-        case .running: return "⏳"
-        case .passed: return "✓"
-        case .failed: return "✗"
+        case .running: return "●"
+        case .passed: return "○"
+        case .failed: return "!"
         }
     }
 
