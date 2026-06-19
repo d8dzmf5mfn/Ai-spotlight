@@ -7,32 +7,76 @@ struct ResultRowView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: iconName)
-                .frame(width: 24, height: 24)
-                .foregroundStyle(.secondary)
+            // ── Selected indicator bar ──
+            if isSelected {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(Color.accentColor)
+                    .frame(width: 2.5)
+                    .padding(.vertical, 4)
+                    .transition(.scale.combined(with: .opacity))
+            }
+
+            // Icon
+            ZStack {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.04))
+                    .frame(width: 32, height: 32)
+                Image(systemName: iconName)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary.opacity(0.8))
+            }
+
+            // Title + Subtitle
             VStack(alignment: .leading, spacing: 2) {
-                Text(result.title).font(.body)
+                Text(result.title)
+                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(isSelected ? Color.primary : Color.primary.opacity(0.85))
+                    .lineLimit(1)
                 if let s = result.subtitle {
-                    Text(s).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text(s)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
                 }
             }
+
             Spacer()
-            Text("↵")
-                .font(.caption2).foregroundStyle(.tertiary)
-                .padding(.horizontal, 6).padding(.vertical, 2)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 4))
+
+            // Open hint
+            if isSelected {
+                HStack(spacing: 3) {
+                    Image(systemName: "arrow.up.forward")
+                        .font(.system(size: 9, weight: .bold))
+                    Text("Open")
+                        .font(.system(size: 9, weight: .semibold))
+                }
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(
+                    Capsule()
+                        .fill(Color.primary.opacity(0.05))
+                )
+                .transition(.scale.combined(with: .opacity))
+            }
         }
-        .padding(.horizontal, 12).padding(.vertical, 6)
-        .background(isSelected ? Color.accentColor.opacity(0.25) : Color.clear)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isSelected ? Color.accentColor.opacity(0.08) : Color.clear)
+        )
         .contentShape(Rectangle())
+        .padding(.horizontal, 4)
+        .animation(.spring(response: 0.2, dampingFraction: 0.9), value: isSelected)
     }
 
     private var iconName: String {
         switch result.kind {
         case .file:
-            return result.url.pathExtension.lowercased() == "pdf" ? "doc.fill" : "doc"
+            return result.url.pathExtension.lowercased() == "pdf" ? "doc.text.fill" : "doc"
         case .folder: return "folder"
-        case .app: return "app.fill"
+        case .app: return "app.badge.checkmark"
         case .command: return result.iconSystemName
         }
     }

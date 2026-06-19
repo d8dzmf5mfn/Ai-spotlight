@@ -14,10 +14,22 @@ struct SearchField: NSViewRepresentable {
         tf.isBezeled = false
         tf.drawsBackground = false
         tf.focusRingType = .none
-        tf.font = .systemFont(ofSize: 22, weight: .regular)
+        tf.font = .systemFont(ofSize: 24, weight: .regular)
+        tf.textColor = .labelColor
         tf.delegate = context.coordinator
         tf.bezelStyle = .squareBezel
         tf.isBordered = false
+        tf.allowsEditingTextAttributes = false
+        /// Set placeholder text color to a subtle secondary
+        if let cell = tf.cell as? NSTextFieldCell {
+            cell.placeholderAttributedString = NSAttributedString(
+                string: placeholder,
+                attributes: [
+                    .foregroundColor: NSColor.tertiaryLabelColor.withAlphaComponent(0.6),
+                    .font: NSFont.systemFont(ofSize: 24, weight: .regular)
+                ]
+            )
+        }
         return tf
     }
 

@@ -31,7 +31,7 @@ struct SettingsView: View {
                         Text("Custom (any OpenAI-compatible API)").tag("custom")
                     }
                     Text(providerDescription)
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(.tertiary)
                 }
 
                 if store.activeProvider == "ollama" {
@@ -63,7 +63,7 @@ struct SettingsView: View {
                         Text(discoveryStatusLine)
                             .font(.caption).foregroundStyle(discoveryStatusColor)
                         Text("Default endpoint: http://localhost:11434")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.caption).foregroundStyle(.tertiary)
                         // Phase 5-D: 4-step diagnostic replaces the
                         // 1-line "Test Ollama connection" button.
                         // Same 4-row UI as the Custom section,
@@ -121,7 +121,7 @@ struct SettingsView: View {
                                     Text("Model '\(store.customModel)' is not in this provider's catalog")
                                         .font(.callout.bold())
                                     Text("Pick a model from the dropdown above, or click Reset to use the first available model.")
-                                        .font(.caption).foregroundStyle(.secondary)
+                                        .font(.caption).foregroundStyle(.tertiary)
                                         .fixedSize(horizontal: false, vertical: true)
                                     if let first = store.discoveredModels.first {
                                         Button("Reset to '\(first)'") {
@@ -175,7 +175,7 @@ struct SettingsView: View {
                            isOn: $store.useSQLiteAugmentation)
                         .help("Add a SQLite FTS5-backed search provider to the fan-out. Step-4: backend is active; add folders in \"Indexed Folders\" to populate the index.")
                     Text("When enabled, a SQLite FTS5 backend participates in the fan-out alongside MDQuery. Add folders in \"Indexed Folders\" below to populate the index. The SyncService scans enrolled paths every 60 seconds.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(.tertiary)
                 }
                 Section("Indexed Folders") {
                     // Step-4: user-managed list of folders to index
@@ -185,7 +185,7 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         if observedIndexedPaths.isEmpty {
                             Text("No folders indexed yet. Add folders below to enable SQLite-backed search.")
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(.tertiary)
                                 .font(.caption)
                                 .fixedSize(horizontal: false, vertical: true)
                         } else {
@@ -287,7 +287,7 @@ struct SettingsView: View {
 
                         Text("Files inside indexed folders are searchable through the SQLite FTS5 backend. Sync runs every 60 seconds.")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.tertiary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -314,7 +314,7 @@ struct SettingsView: View {
                                     .font(.callout.bold())
                                 Text("Click the button below to open System Settings → Privacy & Security → Accessibility, then toggle AI Spotlight on. The hotkey won't work until you do.")
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(.tertiary)
                                     .fixedSize(horizontal: false, vertical: true)
                                 Button("Open System Settings") {
                                     if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
@@ -329,18 +329,25 @@ struct SettingsView: View {
                     Text("Default: ⌘+Space. If ⌘+Space also opens macOS Spotlight, " +
                          "disable it in System Settings → Keyboard → Keyboard Shortcuts " +
                          "→ Spotlight → uncheck \"Show Spotlight search\".")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(.tertiary)
 
                 }  // Section("Hotkey")
             }  // Form
             .padding(20)
         }  // ScrollView
 
-            Divider()
+            Rectangle()
+                .fill(LinearGradient(
+                    colors: [Color.primary.opacity(0.04), Color.primary.opacity(0.08), Color.primary.opacity(0.04)],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                ))
+                .frame(height: 1)
 
             HStack {
                 Spacer()
                 Button("Done") { dismissWindow() }
+                    .tint(.purple)
                     .keyboardShortcut(.defaultAction)
             }
             .padding(.horizontal, 20).padding(.vertical, 10)
@@ -420,7 +427,7 @@ struct SettingsView: View {
                     .font(.caption)
                 Text("Heads up: \(store.ollamaModel) needs ~2.5GB+ of RAM. On a 16GB Mac with AI Spotlight running, this can OOM. Try gemma2:2b or qwen2.5:3b.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -498,7 +505,7 @@ struct SettingsView: View {
                     .font(.caption.bold())
                 Text(verdictDetail(verdict))
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.tertiary)
             }
         }
     }
@@ -558,10 +565,10 @@ struct SettingsView: View {
                 Text(err).font(.caption).foregroundStyle(.red)
             } else if let last = store.lastModelRefresh {
                 Text("Last refresh: " + Self.relativeTime(last))
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(.tertiary)
             } else if !canDiscover {
                 Text("This provider has no /v1/models endpoint. Type the model name.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(.tertiary)
             }
             if canDiscover && !store.useManualModel && !store.discoveredModels.isEmpty {
                 Button("Type a custom model name instead") { store.useManualModel = true }

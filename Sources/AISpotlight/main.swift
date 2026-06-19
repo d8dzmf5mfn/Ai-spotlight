@@ -180,6 +180,7 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
         let readTool = BuiltinTools.readFile()
         let clipGetTool = BuiltinTools.clipboardGet()
         let clipSetTool = BuiltinTools.clipboardSet()
+        let calendarTool = BuiltinTools.readCalendar()
         let sema = DispatchSemaphore(value: 0)
         Task.detached(priority: .userInitiated) {
             await toolRegistry.register(searchTool)
@@ -189,6 +190,7 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
             await toolRegistry.register(readTool)
             await toolRegistry.register(clipGetTool)
             await toolRegistry.register(clipSetTool)
+            await toolRegistry.register(calendarTool)
             sema.signal()
         }
         // .now() returns immediately if already signalled;
@@ -198,7 +200,7 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
         if result == .timedOut {
             Log.write("tool registry registration TIMED OUT after 5s; tools may not be available")
         } else {
-            Log.write("tool registry: 7 tools registered (search_files, open_file, list_apps, run_shell, read_file, clipboard_get, clipboard_set)")
+            Log.write("tool registry: 8 tools registered (search_files, open_file, list_apps, run_shell, read_file, clipboard_get, clipboard_set, read_calendar)")
         }
 
 // Phase 6 Step-3: the SQLite augmentation backend is added to

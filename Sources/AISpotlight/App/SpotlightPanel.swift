@@ -6,11 +6,6 @@ final class SpotlightPanel: NSPanel {
         let contentRect = NSRect(x: 0, y: 0, width: 720, height: 400)
         super.init(
             contentRect: contentRect,
-            // Drop .nonactivatingPanel so the panel can become key/main properly.
-            // The downside is the panel may briefly steal focus when shown; we
-            // compensate by calling makeKeyAndOrderFront and immediately
-            // returning focus to the previous app is not possible — but the
-            // search field needs focus to be useful.
             styleMask: [.borderless, .resizable],
             backing: .buffered, defer: false
         )
@@ -23,6 +18,8 @@ final class SpotlightPanel: NSPanel {
         self.backgroundColor = .clear
         self.hasShadow = true
         self.hidesOnDeactivate = false
+        // Scale-away on order-out for a polished dismissal
+        self.animationBehavior = .documentWindow
     }
 
     override var canBecomeKey: Bool { true }
@@ -30,13 +27,27 @@ final class SpotlightPanel: NSPanel {
 
     func toggle() {
         if isVisible {
-            orderOut(nil)
+            // Animated hide
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.2
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                self.animator().alphaValue = 0
+            } completionHandler: {
+                self.orderOut(nil)
+                self.alphaValue = 1.0
+            }
             return
         }
         positionCenter()
-        // Make key so the search field receives input.
+        // Start invisible, then fade in
+        alphaValue = 0
         makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.25
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            self.animator().alphaValue = 1.0
+        }
     }
 
     private func positionCenter() {

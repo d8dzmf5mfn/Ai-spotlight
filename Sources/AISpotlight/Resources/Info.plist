@@ -11,5 +11,7 @@
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>LSUIElement</key><true/>
+    <key>NSCalendarsUsageDescription</key>
+    <string>AI Spotlight needs calendar access so the AI can answer questions about your schedule.</string>
 </dict>
 </plist>

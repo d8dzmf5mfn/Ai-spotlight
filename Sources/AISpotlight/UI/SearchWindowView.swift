@@ -1,315 +1,431 @@
 import SwiftUI
 import AISpotlightKit
 
+// MARK: - Premium Minimalist Search Window
+
 struct SearchWindowView: View {
     @ObservedObject var state: AppState
 
     var body: some View {
-        VStack(spacing: 0) {
-            SearchField(
-                text: $state.query,
-                placeholder: state.placeholder,
-                onSubmit: state.activate
+        ZStack {
+            // ── Apple Intelligence Bezel Glow ──
+            // Only active when AI is thinking or has a reply
+            if state.isLLMBusy || state.llmReply != nil {
+                BezelGlowView(
+                    isActive: true,
+                    cornerRadius: 16
+                )
+                .allowsHitTesting(false)
+                .transition(.opacity.animation(.easeInOut(duration: 0.6)))
+            }
+
+            // ── Main Panel Content ──
+            VStack(spacing: 0) {
+                SearchField(
+                    text: $state.query,
+                    placeholder: state.placeholder,
+                    onSubmit: state.activate
+                )
+                .padding(.horizontal, 20)
+                .padding(.top, 18)
+                .padding(.bottom, 12)
+                .onChange(of: state.query) { _, new in
+                    state.onQueryChange(new)
+                }
+
+                dividerLine
+
+                searchSection
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+
+                if state.llmError != nil || state.llmReply != nil || state.isLLMBusy {
+                    dividerLine
+                    llmSection
+                        .transition(
+                            .asymmetric(
+                                insertion: .opacity.combined(with: .move(edge: .bottom)).animation(.spring(response: 0.38, dampingFraction: 0.85)),
+                                removal: .opacity.animation(.easeOut(duration: 0.2))
+                            )
+                        )
+                }
+            }
+            .background(.ultraThinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [.white.opacity(0.12), .white.opacity(0.04), .white.opacity(0.08)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
             )
-            .padding(.horizontal, 16)
-            .padding(.top, 14)
-            .padding(.bottom, 10)
-            .onChange(of: state.query) { _, new in
-                state.onQueryChange(new)
-            }
-
-            Divider()
-
-            // Section 1: search results (file/app)
-            // The "SEARCH" label makes it clear this is the file
-            // and app list, distinct from the AI section below.
-            searchSection
-
-            // Section 2: AI reply (only when active)
-            // The "AI" badge + clear section header tells the
-            // user "this is the LLM talking, not a file match."
-            if state.llmError != nil || state.llmReply != nil || state.isLLMBusy {
-                Divider()
-                    .background(Color.secondary.opacity(0.3))
-                llmSection
-            }
         }
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(.white.opacity(0.1))
-        )
-        // Phase 5-G: consent dialog for destructive tool calls
-        // (shell, read_file, clipboard_set). Presented as a sheet
-        // overlaying the search panel so the user can Allow or Deny
-        // without losing their search context.
+        .shadow(color: .black.opacity(0.18), radius: 30, x: 0, y: 8)
         .sheet(isPresented: .init(
             get: { state.pendingConsent != nil },
             set: { if !$0 { state.pendingConsent = nil } }
         )) {
-            VStack(spacing: 16) {
-                Image(systemName: "exclamationmark.shield.fill")
-                    .font(.system(size: 36))
-                    .foregroundStyle(.orange)
-                Text("Allow tool?")
-                    .font(.title2.bold())
-                if let pc = state.pendingConsent {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Tool:").bold()
-                            Text(pc.tool).monospaced()
-                        }
-                        HStack(alignment: .top) {
-                            Text("Args:").bold()
-                            Text(pc.args).font(.caption).monospaced()
-                        }
-                    }
-                    .padding()
-                    .background(Color.gray.opacity(0.1))
-                    .cornerRadius(8)
-                }
-                HStack(spacing: 16) {
-                    Button("Deny") {
-                        state.respondToConsent(approved: false)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.red)
-                    Button("Allow") {
-                        state.respondToConsent(approved: true)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.blue)
-                }
-            }
-            .padding(24)
-            .frame(minWidth: 340)
+            consentDialog
         }
+        .animation(.spring(response: 0.32, dampingFraction: 0.9), value: state.results.isEmpty)
+        .animation(.spring(response: 0.32, dampingFraction: 0.9), value: state.isLLMBusy)
+        .animation(.easeInOut(duration: 0.6), value: state.llmReply != nil)
     }
 
-    // MARK: - Search results section
+    // MARK: - Divider
+
+    private var dividerLine: some View {
+        Rectangle()
+            .fill(LinearGradient(
+                colors: [.white.opacity(0.05), .white.opacity(0.1), .white.opacity(0.05)],
+                startPoint: .leading,
+                endPoint: .trailing
+            ))
+            .frame(height: 1)
+    }
+
+    // MARK: - Search Results Section
 
     @ViewBuilder
     private var searchSection: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Section header — pinned at the top of the result
-            // list. Tiny uppercase label so it doesn't compete
-            // with the actual result text, but is always
-            // visible so the user knows what they're looking at.
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .font(.caption2)
-                Text("SEARCH")
-                    .font(.caption2.weight(.semibold))
-                    .tracking(0.5)
-                if state.isLoading && !state.isLLMBusy {
-                    ProgressView()
-                        .scaleEffect(0.5)
-                        .frame(width: 10, height: 10)
-                }
-            }
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 4)
+            sectionHeader(
+                icon: "magnifyingglass",
+                title: "Search",
+                accentColor: .secondary,
+                isLoading: state.isLoading && !state.isLLMBusy
+            )
 
             if state.results.isEmpty && !state.isLoading {
-                VStack {
-                    Spacer()
-                    Text(state.emptyMessage)
-                        .foregroundStyle(.secondary)
-                        .font(.callout)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                emptyStateView(message: state.emptyMessage)
+                    .transition(.opacity)
             } else {
                 ResultListView(
                     results: $state.results,
                     selection: $state.selection,
                     onActivate: { _ in await state.activate() }
                 )
-                .frame(maxHeight: 200)
+                .frame(maxHeight: 220)
+                .transition(.opacity.animation(.easeInOut(duration: 0.2)))
             }
         }
     }
 
-    // MARK: - LLM section
+    // MARK: - LLM Section
 
     @ViewBuilder
     private var llmSection: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Section header — clearly marks the AI section
-            // with a colored badge. Uses a different icon and
-            // a stronger tint than the search header so the
-            // user can tell at a glance which section is which.
-            HStack(spacing: 6) {
-                Image(systemName: "sparkles")
-                    .font(.caption2)
-                Text("AI REPLY")
-                    .font(.caption2.weight(.semibold))
-                    .tracking(0.5)
-                if state.isLLMBusy {
-                    ProgressView()
-                        .scaleEffect(0.5)
-                        .frame(width: 10, height: 10)
-                }
-            }
-            .foregroundStyle(.purple)  // distinct from .secondary
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 4)
+            sectionHeader(
+                icon: "sparkles",
+                title: "AI Reply",
+                accentColor: .purple,
+                isLoading: state.isLLMBusy
+            )
 
             LLMReplyView(state: state)
-                .frame(maxHeight: 220)
+                .frame(maxHeight: 260)
         }
-        .background(Color.purple.opacity(0.04))  // subtle purple wash
+        .background(
+            LinearGradient(
+                colors: [Color.purple.opacity(0.03), Color.clear],
+                startPoint: .top,
+                endPoint: .center
+            )
+        )
+    }
+
+    // MARK: - Reusable Section Header
+
+    @ViewBuilder
+    private func sectionHeader(icon: String, title: String, accentColor: Color, isLoading: Bool) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 10, weight: .semibold))
+            Text(title)
+                .font(.system(size: 10, weight: .semibold))
+                .textCase(.uppercase)
+                .tracking(1.2)
+            if isLoading {
+                ProgressView()
+                    .scaleEffect(0.45)
+                    .frame(width: 8, height: 8)
+            }
+        }
+        .foregroundStyle(accentColor.opacity(0.7))
+        .padding(.horizontal, 20)
+        .padding(.top, 10)
+        .padding(.bottom, 6)
+    }
+
+    // MARK: - Empty State
+
+    @ViewBuilder
+    private func emptyStateView(message: String) -> some View {
+        VStack(spacing: 8) {
+            Spacer()
+            Image(systemName: "text.magnifyingglass")
+                .font(.system(size: 18))
+                .foregroundStyle(.tertiary)
+            Text(message)
+                .foregroundStyle(.tertiary)
+                .font(.system(size: 13))
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Consent Dialog
+
+    private var consentDialog: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "exclamationmark.shield.fill")
+                .font(.system(size: 32))
+                .foregroundStyle(
+                    LinearGradient(colors: [.orange, .orange.opacity(0.6)],
+                                   startPoint: .top, endPoint: .bottom)
+                )
+
+            Text("Allow Tool?")
+                .font(.system(size: 16, weight: .semibold))
+
+            if let pc = state.pendingConsent {
+                VStack(alignment: .leading, spacing: 10) {
+                    detailRow(label: "Tool", value: pc.tool, monospaced: true)
+                    detailRow(label: "Args", value: pc.args, monospaced: true)
+                }
+                .padding(14)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(Color.gray.opacity(0.06))
+                )
+            }
+
+            HStack(spacing: 12) {
+                Button("Deny") {
+                    state.respondToConsent(approved: false)
+                }
+                .buttonStyle(.bordered)
+                .tint(.red.opacity(0.8))
+
+                Button("Allow") {
+                    state.respondToConsent(approved: true)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.purple)
+            }
+        }
+        .padding(28)
+        .frame(minWidth: 340)
+    }
+
+    @ViewBuilder
+    private func detailRow(label: String, value: String, monospaced: Bool) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(label + ":")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .trailing)
+            Text(value)
+                .font(monospaced ? .system(size: 11).monospaced() : .system(size: 11))
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+        }
     }
 }
 
-/// Renders the LLM's reply (or "thinking…" indicator or an
-/// error message) under the AI section. Plain Text with
-/// monospaced font for now — Phase 4.1.8.1 can switch to
-/// AttributedString for markdown rendering if the LLM emits
-/// markdown (Ollama models often do).
+// MARK: - LLM Reply View (Premium)
+
 private struct LLMReplyView: View {
     @ObservedObject var state: AppState
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: true) {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 if let err = state.llmError, !err.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Label(err, systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.red)
-                            .font(.callout)
-                            .fixedSize(horizontal: false, vertical: true)
-                        // Phase 4.2.6: show a "Start Ollama"
-                        // button for the not-running variants.
-                        // The user can relaunch the Ollama.app
-                        // with a single click — we don't
-                        // auto-restart it (P2 architecture: Ollama
-                        // is an external dependency, not under our
-                        // control).
-                        if let kind = state.llmErrorKind, Self.shouldShowStartOllamaButton(kind) {
-                            Button {
-                                Self.startOllama()
-                            } label: {
-                                Label("Start Ollama", systemImage: "play.circle")
-                                    .font(.callout)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                        }
-                    }
+                    errorView(err)
                 } else if let reply = state.llmReply, !reply.isEmpty {
-                    // Phase 4.3.2: if the LLM used tools, show
-                    // the tool trace above the final answer.
-                    // Each entry is "🔧 tool_name: summary"
-                    // produced by AppState.runLLMAsk from the
-                    // AskWithToolsResult.toolCalls list.
-                    if !state.toolTrace.isEmpty {
-                        VStack(alignment: .leading, spacing: 2) {
-                            ForEach(state.toolTrace, id: \.self) { entry in
-                                Text(entry)
-                                    .font(.caption)
-                                    .foregroundStyle(.purple.opacity(0.85))
-                            }
-                        }
-                        .padding(.bottom, 4)
-                    }
-                    // Streaming: llmReply grows chunk-by-chunk as the
-                    // LLM produces tokens. ScrollViewReader lets us
-                    // auto-scroll to the bottom so the user always
-                    // sees the latest text.
-                    // Phase 4.4: file paths the LLM mentioned
-                    // in its reply (e.g. "/Users/me/foo.md").
-                    // Show each as a clickable button so the
-                    // user can open it without copy-paste or
-                    // navigating the file system.
-                    if !state.llmReplyPaths.isEmpty {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Files mentioned:")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            ForEach(Array(state.llmReplyPaths.enumerated()), id: \.offset) { _, url in
-                                Button {
-                                    state.openLLMReplyPath(url)
-                                } label: {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "doc.text")
-                                            .font(.caption)
-                                        Text(url.lastPathComponent)
-                                            .font(.caption)
-                                            .lineLimit(1)
-                                    }
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .help(url.path)
-                            }
-                        }
-                        .padding(.top, 4)
-                    }
-                    // Phase 4.4: when a tool is running, show
-                    // a "🔧 using X..." indicator above the
-                    // (currently empty) reply. The LLM reply
-                    // text appears below once the loop
-                    // completes.
-                    if let tool = state.currentToolName {
-                        HStack(spacing: 4) {
-                            ProgressView().scaleEffect(0.5).frame(width: 12, height: 12)
-                            Text("🔧 using \(tool)…")
-                                .font(.caption)
-                                .foregroundStyle(.purple)
-                        }
-                        .padding(.bottom, 4)
-                    }
-                    Text(reply)
-                        .font(.callout.monospaced())
-                        .textSelection(.enabled)
+                    replyContentView(reply: reply)
                 } else if state.isLLMBusy {
-                    Label("Thinking…", systemImage: "ellipsis.circle")
-                        .foregroundStyle(.secondary)
-                        .font(.callout)
+                    thinkingIndicator
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
+            .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
-    /// True when the error kind is one that can be resolved
-    /// by relaunching Ollama.app. Other kinds (timeout, bad
-    /// response, etc.) need different fixes.
-    private static func shouldShowStartOllamaButton(_ kind: LLMErrorKind) -> Bool {
-        switch kind {
-        case .ollamaNotRunning, .idleExit, .userQuit:
-            return true
-        case .ollamaCrashed, .timeout, .badResponse, .other:
-            return false
+    // MARK: - Error View
+
+    private func errorView(_ err: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.red.opacity(0.7))
+                Text(err)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.red.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let kind = state.llmErrorKind, Self.shouldShowStartOllamaButton(kind) {
+                Button {
+                    Self.startOllama()
+                } label: {
+                    Label("Start Ollama", systemImage: "play.circle")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.purple)
+                .controlSize(.small)
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(.red.opacity(0.04))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(.red.opacity(0.08), lineWidth: 0.5)
+                )
+        )
+    }
+
+    // MARK: - Reply Content (with typewriter streaming)
+
+    @ViewBuilder
+    private func replyContentView(reply: String) -> some View {
+        // Tool Trace
+        if !state.toolTrace.isEmpty {
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(state.toolTrace, id: \.self) { entry in
+                    HStack(spacing: 6) {
+                        Image(systemName: "gearshape.2")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.purple.opacity(0.5))
+                        Text(entry)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.purple.opacity(0.75))
+                    }
+                }
+            }
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(.purple.opacity(0.04))
+            )
+            .padding(.bottom, 4)
+        }
+
+        // Running tool indicator
+        if let tool = state.currentToolName {
+            HStack(spacing: 6) {
+                ProgressView()
+                    .scaleEffect(0.6)
+                    .frame(width: 12, height: 12)
+                HStack(spacing: 4) {
+                    Image(systemName: "hammer")
+                        .font(.system(size: 10))
+                    Text("Using \(tool)…")
+                        .font(.system(size: 11))
+                }
+                .foregroundStyle(.purple.opacity(0.8))
+            }
+            .padding(.bottom, 6)
+        }
+
+        // ═══ Streaming Typewriter Text ═══
+        StreamingTextView(
+            text: reply,
+            isStreaming: state.isLLMBusy,
+            cursorStyle: .block,
+            font: .system(size: 13, design: .monospaced),
+            textColor: .primary.opacity(0.9)
+        )
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.primary.opacity(0.03))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(Color.primary.opacity(0.04), lineWidth: 0.5)
+                )
+        )
+
+        // LLM-reply file paths
+        if !state.llmReplyPaths.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Files Mentioned")
+                    .font(.system(size: 10, weight: .semibold))
+                    .textCase(.uppercase)
+                    .tracking(0.8)
+                    .foregroundStyle(.tertiary)
+
+                ForEach(Array(state.llmReplyPaths.enumerated()), id: \.offset) { _, url in
+                    Button {
+                        state.openLLMReplyPath(url)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "doc.text")
+                                .font(.system(size: 10))
+                            Text(url.lastPathComponent)
+                                .font(.system(size: 12))
+                                .lineLimit(1)
+                            Spacer()
+                            Image(systemName: "arrow.up.right")
+                                .font(.system(size: 8))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color.primary.opacity(0.03))
+                        )
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(url.path)
+                }
+            }
+            .padding(.top, 4)
         }
     }
 
-    /// Launch Ollama.app via the system `open` command. We
-    /// use Process rather than NSWorkspace.shared.open so we
-    /// don't accidentally bring it to the foreground (the
-    /// user might be in the middle of typing in our panel —
-    /// we want the relaunch to be silent, in the background).
+    // MARK: - Thinking Indicator
+
+    private var thinkingIndicator: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .scaleEffect(0.7)
+            Text("Thinking…")
+                .font(.system(size: 13))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Static Helpers
+
+    private static func shouldShowStartOllamaButton(_ kind: LLMErrorKind) -> Bool {
+        switch kind {
+        case .ollamaNotRunning, .idleExit, .userQuit: return true
+        case .ollamaCrashed, .timeout, .badResponse, .other: return false
+        }
+    }
+
     private static func startOllama() {
         let task = Process()
         task.launchPath = "/usr/bin/open"
         task.arguments = ["-g", "-a", "Ollama"]
-        // -g = don't bring to foreground (background launch)
         do {
             try task.run()
         } catch {
-            // If the launch fails (e.g. Ollama.app not
-            // installed), fall back to opening the Ollama
-            // homepage in the user's browser so they can
-            // download it. The URL is hardcoded because
-            // there's no API for "open ollama's website" on
-            // macOS.
             if let url = URL(string: "https://ollama.com/download") {
                 NSWorkspace.shared.open(url)
             }

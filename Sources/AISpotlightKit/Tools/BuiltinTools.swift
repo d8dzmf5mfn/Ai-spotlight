@@ -1,4 +1,5 @@
 import Foundation
+@preconcurrency import EventKit
 #if canImport(AppKit)
 import AppKit
 #endif
@@ -209,7 +210,8 @@ public enum BuiltinTools {
             let timeout = min((args["timeout"] as? Int) ?? 10, 60)
             let result = try await ProcessRunner.run(
                 executable: "/bin/sh",
-                arguments: ["-c", command]
+                arguments: ["-c", command],
+                timeoutSeconds: timeout
             )
             // 124 is timeout's exit code; we surface a friendlier message.
             if Int(result.exitCode) == 124 {
@@ -335,6 +337,91 @@ public enum BuiltinTools {
             )
         }
     }
+    /// Phase 5-I: read calendar events using EventKit. Lets the LLM
+    /// answer questions about the user's schedule. Requires consent
+    /// because calendar data is private.
+    public static func readCalendar() -> LLMTool {
+        return LLMTool(
+            name: "read_calendar",
+            description: "Read events from your calendar. Provide a date range to limit results.",
+            parametersDescription: """
+            - days (int, optional): number of days from today (default: 1, max: 30)
+            - calendarNames (string, optional): comma-separated calendar names, e.g. "Work,Personal"
+            """,
+            requiresConsent: true
+        ) { args in
+            let days = min((args["days"] as? Int) ?? 1, 30)
+            let calendarFilter = (args["calendarNames"] as? String)?
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            return try await readCalendarEvents(days: days, calendarFilter: calendarFilter)
+        }
+    }
+
+    /// Internal helper: request EventKit access and fetch events.
+    private static func readCalendarEvents(days: Int, calendarFilter: [String]?) async throws -> LLMToolResult {
+        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<LLMToolResult, Error>) in
+            let store = EKEventStore()
+            store.requestFullAccessToEvents { granted, error in
+                if let error {
+                    cont.resume(returning: LLMToolResult(
+                        summary: "Calendar access error: \(error.localizedDescription)",
+                        payload: [:]
+                    ))
+                    return
+                }
+                guard granted else {
+                    cont.resume(returning: LLMToolResult(
+                        summary: "Calendar access denied. Grant access in System Settings > Privacy & Security > Calendars.",
+                        payload: [:]
+                    ))
+                    return
+                }
+                let startDate = Date()
+                let endDate = Calendar.current.date(byAdding: .day, value: days, to: startDate) ?? startDate
+                let predicate = store.predicateForEvents(withStart: startDate, end: endDate, calendars: nil)
+                let events = store.events(matching: predicate)
+                let filtered: [EKEvent]
+                if let filter = calendarFilter, !filter.isEmpty {
+                    filtered = events.filter { ev in
+                        guard let calTitle = ev.calendar?.title else { return false }
+                        return filter.contains { calTitle.localizedCaseInsensitiveContains($0) }
+                    }
+                } else {
+                    filtered = events
+                }
+                let sorted = filtered.sorted { $0.startDate < $1.startDate }
+                if sorted.isEmpty {
+                    cont.resume(returning: LLMToolResult(
+                        summary: "No calendar events found in the next \(days) day(s).",
+                        payload: ["events": .string("[]")]
+                    ))
+                    return
+                }
+                let df = DateFormatter()
+                df.dateFormat = "yyyy-MM-dd HH:mm"
+                var lines: [String] = []
+                for ev in sorted {
+                    let start = df.string(from: ev.startDate)
+                    let end = df.string(from: ev.endDate)
+                    let calName = ev.calendar?.title ?? "?"
+                    let location = ev.location ?? ""
+                    let notes = ev.notes ?? ""
+                    var line = "- [\(calName)] \(start)-\(end) \(ev.title ?? "")"
+                    if !location.isEmpty { line += " @ \(location)" }
+                    if !notes.isEmpty { line += " | notes: \(notes.prefix(200))" }
+                    lines.append(line)
+                }
+                let result = lines.joined(separator: "\n")
+                cont.resume(returning: LLMToolResult(
+                    summary: "Found \(sorted.count) event(s) in the next \(days) day(s).",
+                    payload: ["events": .string(result)]
+                ))
+            }
+        }
+    }
+
 }
 
 /// Errors that tools can throw. The outer loop in
@@ -369,7 +456,7 @@ public enum ProcessRunner {
     /// Run a process and await its exit. The stdout/stderr are
     /// captured as strings. Throws on spawn failure (e.g. the
     /// executable path doesn't exist).
-    public static func run(executable: String, arguments: [String]) async throws -> Result {
+    public static func run(executable: String, arguments: [String], timeoutSeconds: Int = 0) async throws -> Result {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Result, Error>) in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: executable)
@@ -393,6 +480,14 @@ public enum ProcessRunner {
                 try process.run()
             } catch {
                 cont.resume(throwing: error)
+            }
+            if timeoutSeconds > 0 {
+                Task {
+                    try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds) * 1_000_000_000)
+                    if process.isRunning {
+                        process.terminate()
+                    }
+                }
             }
         }
     }
