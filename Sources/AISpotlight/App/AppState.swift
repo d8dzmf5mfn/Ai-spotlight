@@ -110,6 +110,12 @@ final class AppState: ObservableObject {
     @Published var isAppMode: Bool = false
     /// Chat input field for app/chat mode.
     @Published var chatInput: String = ""
+    @Published var conversationId: UUID? = nil
+    @Published var savedConversations: [Conversation] = []
+    @Published var showFilePicker: Bool = false
+    @Published var pendingAttachments: [Conversation.Attachment] = []
+    @Published var showSidebar: Bool = true
+    var conversationStore: ConversationStore? = nil
 
     /// Phase 4.4: name of the tool currently running, if any.
     /// Set by runLLMAsk before the tool handler runs, cleared
@@ -240,6 +246,7 @@ final class AppState: ObservableObject {
     /// Clear LLM conversation state. Called when the panel reopens
     /// (unless app mode is active).
     func clearLLMState() {
+        saveCurrentConversation()
         llmHistory.removeAll()
         llmReply = nil
         llmError = nil
@@ -247,6 +254,50 @@ final class AppState: ObservableObject {
         toolTrace.removeAll()
         llmReplyPaths.removeAll()
         currentToolName = nil
+        chatInput = ""
+        pendingAttachments.removeAll()
+        conversationId = nil
+    }
+
+    func saveCurrentConversation() {
+        guard !llmHistory.isEmpty else { return }
+        var msgs: [Conversation.Message] = []
+        for entry in llmHistory {
+            let role: Conversation.Message.Role = entry.role == .user ? .user : .assistant
+            msgs.append(Conversation.Message(role: role, text: entry.text))
+        }
+        let title = String(llmHistory.first?.text.prefix(60) ?? "Conversation")
+        let conv = Conversation(id: conversationId ?? UUID(), title: title, messages: msgs)
+        conversationId = conv.id
+        Task { [weak self] in
+            await self?.conversationStore?.save(conv)
+            let all = await self?.conversationStore?.all() ?? []
+            await MainActor.run { self?.savedConversations = all }
+        }
+    }
+
+    func loadConversation(_ id: UUID) {
+        saveCurrentConversation()
+        guard let conv = savedConversations.first(where: { $0.id == id }) else { return }
+        conversationId = conv.id
+        llmHistory = conv.messages.map { msg in
+            .init(role: msg.role == .user ? .user : .assistant, text: msg.text)
+        }
+        llmReply = llmHistory.last(where: { $0.role == .assistant })?.text
+        chatInput = ""
+        pendingAttachments.removeAll()
+    }
+
+    func deleteConversation(_ id: UUID) {
+        savedConversations.removeAll { $0.id == id }
+        if conversationId == id { conversationId = nil }
+        Task { [weak self] in await self?.conversationStore?.delete(id) }
+    }
+
+    func deleteAllConversations() {
+        savedConversations.removeAll()
+        conversationId = nil
+        Task { [weak self] in await self?.conversationStore?.deleteAll() }
     }
 
     private func runSearch(_ q: String) async {

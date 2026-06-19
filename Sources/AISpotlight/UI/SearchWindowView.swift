@@ -86,155 +86,391 @@ struct SearchWindowView: View {
     // MARK: - Chat Mode (wide panel)
 
     private var chatMode: some View {
+        HStack(spacing: 0) {
+            // Sidebar
+            if state.showSidebar {
+                sidebarView
+                    .frame(width: 200)
+                    .background(Color.primary.opacity(0.03))
+            }
+
+            // Main chat area
+            VStack(spacing: 0) {
+                // Header bar
+                chatHeader
+
+                dividerLine
+
+                // Messages
+                ScrollViewReader { proxy in
+                    ScrollView(.vertical) {
+                        LazyVStack(spacing: 12) {
+                            if state.llmHistory.isEmpty && state.llmReply == nil {
+                                emptyChatPrompt
+                            }
+                            ForEach(Array(state.llmHistory.enumerated()), id: \.offset) { _, entry in
+                                chatMessageBubble(entry.role == .user ? .user : .assistant, entry.text)
+                            }
+                            if let reply = state.llmReply, !reply.isEmpty {
+                                chatMessageBubble(.assistant, reply)
+                            }
+                            if state.isLLMBusy {
+                                HStack(spacing: 8) {
+                                    ProgressView().scaleEffect(0.5)
+                                    Text("Thinking...").font(.system(size: 12)).foregroundStyle(.tertiary)
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 20)
+                            }
+                            if !state.toolTrace.isEmpty {
+                                ForEach(state.toolTrace, id: \.self) { entry in
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "gearshape.2").font(.system(size: 8))
+                                        Text(entry).font(.system(size: 10))
+                                    }
+                                    .foregroundStyle(.purple.opacity(0.5))
+                                    .padding(.horizontal, 20)
+                                }
+                            }
+                            Color.clear.frame(height: 1).id("bottom")
+                        }
+                        .padding(.vertical, 12)
+                    }
+                    .onChange(of: state.llmReply) { _, _ in withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
+                    .onChange(of: state.isLLMBusy) { _, _ in withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
+                }
+
+                dividerLine
+
+                // Input area
+                chatInputArea
+            }
+        }
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.white.opacity(0.08)))
+        .shadow(color: .black.opacity(0.18), radius: 30, x: 0, y: 8)
+        .sheet(isPresented: .init(
+            get: { state.pendingConsent != nil },
+            set: { if !$0 { state.pendingConsent = nil } }
+        )) { consentDialog }
+        .fileImporter(
+            isPresented: $state.showFilePicker,
+            allowedContentTypes: [.plainText, .pdf, .image, .rtf, .json, .xml, .sourceCode, .yaml],
+            allowsMultipleSelection: true
+        ) { result in
+            handleFilePicker(result)
+        }
+    }
+
+    // MARK: - Sidebar
+
+    private var sidebarView: some View {
         VStack(spacing: 0) {
-            // Header
+            // Sidebar header
             HStack {
-                Text("AI Spotlight")
-                    .font(.system(size: 14, weight: .semibold))
+                Text("History")
+                    .font(.system(size: 11, weight: .semibold))
+                    .textCase(.uppercase)
+                    .tracking(0.8)
+                    .foregroundStyle(.tertiary)
                 Spacer()
                 Button {
-                    state.chatInput = ""
-                    state.clearLLMState()
+                    state.showSidebar = false
                 } label: {
-                    Image(systemName: "trash")
-                        .font(.system(size: 11))
+                    Image(systemName: "sidebar.left").font(.system(size: 10))
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.tertiary)
-                .help("Clear conversation")
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 14)
-            .padding(.bottom, 10)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
 
-            dividerLine
+            Divider()
 
-            // Conversation history
-            ScrollViewReader { proxy in
+            // New chat button
+            Button {
+                state.clearLLMState()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "plus.circle").font(.system(size: 11))
+                    Text("New chat").font(.system(size: 12))
+                    Spacer()
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.purple)
+
+            Divider()
+
+            // Conversation list
+            if state.savedConversations.isEmpty {
+                VStack(spacing: 6) {
+                    Spacer()
+                    Text("No saved conversations")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                    Spacer()
+                }
+            } else {
                 ScrollView(.vertical) {
-                    LazyVStack(spacing: 12) {
-                        if state.llmHistory.isEmpty && state.llmReply == nil {
-                            VStack(spacing: 8) {
-                                Image(systemName: "sparkles")
-                                    .font(.system(size: 22))
-                                    .foregroundStyle(.tertiary)
-                                Text("Ask me anything")
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(.tertiary)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.top, 60)
-                        }
-
-                        ForEach(Array(state.llmHistory.enumerated()), id: \.offset) { _, entry in
-                            messageBubble(entry)
-                        }
-
-                        // Current reply
-                        if let reply = state.llmReply, !reply.isEmpty {
-                            HStack {
-                                Text(reply)
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(.primary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                Spacer()
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 10)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-
-                        // Thinking indicator
-                        if state.isLLMBusy {
+                    LazyVStack(spacing: 0) {
+                        ForEach(state.savedConversations) { conv in
                             HStack(spacing: 8) {
-                                ProgressView()
-                                    .scaleEffect(0.5)
-                                Text("Thinking...")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.tertiary)
-                                Spacer()
-                            }
-                            .padding(.horizontal, 16)
-                        }
-
-                        // Tool trace
-                        if !state.toolTrace.isEmpty {
-                            ForEach(state.toolTrace, id: \.self) { entry in
-                                HStack(spacing: 4) {
-                                    Image(systemName: "gearshape.2")
-                                        .font(.system(size: 8))
-                                    Text(entry)
-                                        .font(.system(size: 10))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(conv.title)
+                                        .font(.system(size: 11, weight: conv.id == state.conversationId ? .semibold : .regular))
+                                        .lineLimit(1)
+                                    Text(conv.updatedAt.formatted(.relative(presentation: .named)))
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(.tertiary)
                                 }
-                                .foregroundStyle(.purple.opacity(0.5))
-                                .padding(.horizontal, 16)
+                                Spacer()
+                                if conv.id == state.conversationId {
+                                    Image(systemName: "checkmark").font(.system(size: 8)).foregroundStyle(.purple)
+                                }
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .contentShape(Rectangle())
+                            .background(conv.id == state.conversationId ? Color.purple.opacity(0.06) : Color.clear)
+                            .onTapGesture { state.loadConversation(conv.id) }
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    state.deleteConversation(conv.id)
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
                             }
                         }
-
-                        Color.clear.frame(height: 1).id("bottom")
                     }
-                    .padding(.vertical, 12)
-                }
-                .onChange(of: state.llmReply) { _, _ in
-                    withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
-                }
-                .onChange(of: state.isLLMBusy) { _, _ in
-                    withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                    .padding(.vertical, 4)
                 }
             }
 
-            dividerLine
+            Spacer()
 
-            // Chat input at bottom
-            HStack(spacing: 8) {
-                TextField("Type a message...", text: $state.chatInput)
+            // Bottom: clear all
+            if !state.savedConversations.isEmpty {
+                Divider()
+                Button(role: .destructive) {
+                    state.deleteAllConversations()
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "trash").font(.system(size: 10))
+                        Text("Clear all").font(.system(size: 11))
+                        Spacer()
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.red.opacity(0.7))
+            }
+        }
+    }
+
+    // MARK: - Chat Header
+
+    private var chatHeader: some View {
+        HStack(spacing: 8) {
+            if !state.showSidebar {
+                Button {
+                    state.showSidebar = true
+                } label: {
+                    Image(systemName: "sidebar.left").font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.tertiary)
+            }
+
+            Text("AI Chat")
+                .font(.system(size: 13, weight: .semibold))
+            Spacer()
+            // Settings button
+            Button {
+                NotificationCenter.default.post(name: .aispotlightOpenSettings, object: nil)
+            } label: {
+                Image(systemName: "gearshape").font(.system(size: 12))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.tertiary)
+            .help("Open Settings")
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+    }
+
+    // MARK: - Chat Input Area
+
+    private var chatInputArea: some View {
+        VStack(spacing: 6) {
+            // Show pending attachments
+            if !state.pendingAttachments.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(state.pendingAttachments.indices, id: \.self) { idx in
+                            HStack(spacing: 4) {
+                                Image(systemName: "doc.text").font(.system(size: 9))
+                                Text(state.pendingAttachments[idx].filename)
+                                    .font(.system(size: 10))
+                                    .lineLimit(1)
+                                Button {
+                                    state.pendingAttachments.remove(at: idx)
+                                } label: {
+                                    Image(systemName: "xmark").font(.system(size: 7))
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.tertiary)
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(Color.primary.opacity(0.05))
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 4)
+                }
+                .padding(.horizontal, 20)
+            }
+
+            HStack(alignment: .bottom, spacing: 6) {
+                // Upload button
+                Button {
+                    state.showFilePicker = true
+                } label: {
+                    Image(systemName: "plus.circle")
+                        .font(.system(size: 18))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.tertiary)
+                .help("Attach file")
+
+                // Text input (larger, multiline)
+                TextField("Type a message...", text: $state.chatInput, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
+                    .lineLimit(1...6)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
                     .background(
-                        RoundedRectangle(cornerRadius: 8)
+                        RoundedRectangle(cornerRadius: 10)
                             .fill(Color.primary.opacity(0.05))
                     )
                     .onSubmit {
                         sendChatMessage()
                     }
 
+                // Send button
                 Button {
                     sendChatMessage()
                 } label: {
                     Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 20))
-                        .foregroundStyle(state.chatInput.isEmpty ? Color.gray.opacity(0.5) : Color.purple)
+                        .font(.system(size: 24))
+                        .foregroundStyle(Color.gray.opacity(state.chatInput.trimmingCharacters(in: .whitespaces).isEmpty && state.pendingAttachments.isEmpty ? 0.5 : 1.0))
                 }
                 .buttonStyle(.plain)
-                .disabled(state.chatInput.isEmpty || state.isLLMBusy)
+                .disabled(state.chatInput.trimmingCharacters(in: .whitespaces).isEmpty && state.pendingAttachments.isEmpty)
             }
             .padding(.horizontal, 20)
-            .padding(.vertical, 12)
+            .padding(.vertical, 10)
         }
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .strokeBorder(Color.white.opacity(0.08))
-        )
-        .shadow(color: .black.opacity(0.18), radius: 30, x: 0, y: 8)
-        .sheet(isPresented: .init(
-            get: { state.pendingConsent != nil },
-            set: { if !$0 { state.pendingConsent = nil } }
-        )) {
-            consentDialog
+    }
+
+    // MARK: - Chat Message Bubble
+
+    private func chatMessageBubble(_ role: Conversation.Message.Role, _ text: String) -> some View {
+        HStack {
+            if role == .user { Spacer(minLength: 80) }
+            Text(text)
+                .font(.system(size: 13))
+                .foregroundStyle(role == .user ? .white : .primary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(role == .user ? Color.purple : Color.primary.opacity(0.05))
+                )
+            if role == .assistant { Spacer(minLength: 80) }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 2)
+    }
+
+    // MARK: - Empty Chat Prompt
+
+    private var emptyChatPrompt: some View {
+        VStack(spacing: 12) {
+            Spacer().frame(height: 40)
+            Image(systemName: "sparkles")
+                .font(.system(size: 28))
+                .foregroundStyle(.tertiary)
+            Text("Start a conversation")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.secondary)
+            Text("Type a message or attach a file to begin.")
+                .font(.system(size: 12))
+                .foregroundStyle(.tertiary)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    // MARK: - File Picker Handler
+
+    private func handleFilePicker(_ result: Result<[URL], Error>) {
+        guard case .success(let urls) = result else { return }
+        for url in urls {
+            guard url.startAccessingSecurityScopedResource() else { continue }
+            defer { url.stopAccessingSecurityScopedResource() }
+            let filename = url.lastPathComponent
+            let path = url.path
+            let ext = url.pathExtension.lowercased()
+            let mimeType: String
+            switch ext {
+            case "jpg", "jpeg": mimeType = "image/jpeg"
+            case "png": mimeType = "image/png"
+            case "gif": mimeType = "image/gif"
+            case "pdf": mimeType = "application/pdf"
+            case "txt": mimeType = "text/plain"
+            case "swift", "py", "js", "ts", "go", "rs", "rb", "c", "cpp", "h", "m", "mm":
+                mimeType = "text/plain"
+            default: mimeType = "application/octet-stream"
+            }
+            state.pendingAttachments.append(.init(filename: filename, path: path, mimeType: mimeType))
         }
     }
 
     private func sendChatMessage() {
         let msg = state.chatInput.trimmingCharacters(in: .whitespaces)
-        guard !msg.isEmpty else { return }
+        guard !msg.isEmpty || !state.pendingAttachments.isEmpty else { return }
+        let attachments = state.pendingAttachments
         state.chatInput = ""
-        state.query = msg
+        state.pendingAttachments.removeAll()
+        var finalQuery = msg
+        for att in attachments {
+            if att.mimeType.hasPrefix("image/") {
+                finalQuery += " [Attached image: \(att.filename)]"
+            } else {
+                if let content = try? String(contentsOfFile: att.path, encoding: .utf8) {
+                    let preview = String(content.prefix(2000))
+                    finalQuery += " [Attached file: \(att.filename)\n\(preview)]"
+                } else {
+                    finalQuery += " [Attached file: \(att.filename)]"
+                }
+            }
+        }
+        state.query = finalQuery
         Task { await state.activate() }
     }
+
 
     private func messageBubble(_ entry: LLMConversationService.HistoryEntry) -> some View {
         HStack {
