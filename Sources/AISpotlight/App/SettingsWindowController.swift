@@ -50,5 +50,6 @@ final class SettingsWindowController: NSObject {
         Log.write("[SettingsWindowController] show() called (notification received)")
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
     }
 }
