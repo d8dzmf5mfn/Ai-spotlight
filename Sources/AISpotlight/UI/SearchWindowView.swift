@@ -40,6 +40,51 @@ struct SearchWindowView: View {
             RoundedRectangle(cornerRadius: 12)
                 .strokeBorder(.white.opacity(0.1))
         )
+        // Phase 5-G: consent dialog for destructive tool calls
+        // (shell, read_file, clipboard_set). Presented as a sheet
+        // overlaying the search panel so the user can Allow or Deny
+        // without losing their search context.
+        .sheet(isPresented: .init(
+            get: { state.pendingConsent != nil },
+            set: { if !$0 { state.pendingConsent = nil } }
+        )) {
+            VStack(spacing: 16) {
+                Image(systemName: "exclamationmark.shield.fill")
+                    .font(.system(size: 36))
+                    .foregroundStyle(.orange)
+                Text("Allow tool?")
+                    .font(.title2.bold())
+                if let pc = state.pendingConsent {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Tool:").bold()
+                            Text(pc.tool).monospaced()
+                        }
+                        HStack(alignment: .top) {
+                            Text("Args:").bold()
+                            Text(pc.args).font(.caption).monospaced()
+                        }
+                    }
+                    .padding()
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(8)
+                }
+                HStack(spacing: 16) {
+                    Button("Deny") {
+                        state.respondToConsent(approved: false)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                    Button("Allow") {
+                        state.respondToConsent(approved: true)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.blue)
+                }
+            }
+            .padding(24)
+            .frame(minWidth: 340)
+        }
     }
 
     // MARK: - Search results section

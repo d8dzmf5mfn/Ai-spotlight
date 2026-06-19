@@ -1,4 +1,5 @@
 import Foundation
+import os
 import AppKit
 
 /// Scans `/Applications` + running apps. Returns an empty result list
@@ -13,7 +14,7 @@ import AppKit
 public final class AppProvider: SearchProvider, @unchecked Sendable {
     public let name = "Apps"
     private var cached: [SearchResult] = []
-    private let lock = NSLock()
+    private let lock = OSAllocatedUnfairLock()
 
     public init() {
         // Kick off the first scan in the background so the first
@@ -27,9 +28,7 @@ public final class AppProvider: SearchProvider, @unchecked Sendable {
         let results = await Task.detached(priority: .userInitiated) {
             Self.scan()
         }.value
-        lock.lock()
-        cached = results
-        lock.unlock()
+        lock.withLock { cached = results }
     }
 
     private static func scan() -> [SearchResult] {
@@ -59,9 +58,7 @@ public final class AppProvider: SearchProvider, @unchecked Sendable {
         guard case let .openApp(name) = intent else { return [] }
         let q = name.lowercased()
 
-        lock.lock()
-        let snapshot = cached
-        lock.unlock()
+        let snapshot = lock.withLock { cached }
 
         // Single pass: filter by substring, compute prefix hit for
         // ranking, collect into a tiny array. Avoids the earlier
@@ -87,7 +84,7 @@ public final class AppProvider: SearchProvider, @unchecked Sendable {
                 iconSystemName: entry.r.iconSystemName,
                 url: entry.r.url,
                 kind: .app,
-                score: entry.r.score + (entry.isPrefix ? 100 : 10)
+                score: entry.isPrefix ? 1.0 : 0.1
             )
         }
     }

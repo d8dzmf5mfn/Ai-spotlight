@@ -44,7 +44,7 @@ public actor MemoryStore {
     private static let kSearches = "memory.recentSearches"
     private static let kApps = "memory.recentApps"
 
-    private let defaults: UserDefaults
+    private nonisolated(unsafe) let defaults: UserDefaults
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults

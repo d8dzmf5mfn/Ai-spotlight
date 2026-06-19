@@ -113,4 +113,66 @@ final class SQLiteBackendTests: XCTestCase {
         _ = SQLiteBackend()
         XCTAssertNotNil(SQLiteBackend())
     }
+
+    // MARK: - Step-3 new tests
+
+    /// Step-3: FTS5 query translation — single term.
+    func testTranslateToFTS5_singleTerm() {
+        let result = SQLiteBackend.translateToFTS5(["polyester"])
+        XCTAssertEqual(result, "\"polyester\"*")
+    }
+
+    /// Step-3: FTS5 query translation — multiple terms become OR.
+    func testTranslateToFTS5_multipleTerms() {
+        let result = SQLiteBackend.translateToFTS5(["chemistry", "notes", "polyester"])
+        XCTAssertEqual(result, "\"chemistry\"* OR \"notes\"* OR \"polyester\"*")
+    }
+
+    /// Step-3: FTS5 query translation — special characters handled.
+    func testTranslateToFTS5_specialChars() {
+        // Leading + is stripped, embedded ~ is filtered out (not in allowed set)
+        let result = SQLiteBackend.translateToFTS5(["+test -query", "hello~world"])
+        // "test -query" becomes a phrase term (hyphen preserved in allowed set)
+        XCTAssertTrue(result.contains("\"test -query\"*"))
+        // "hello~world" has ~ stripped (not in allowed chars) → "helloworld"
+        XCTAssertTrue(result.contains("\"helloworld\"*"))
+        // The result is an OR of both terms
+        XCTAssertTrue(result.contains(" OR "))
+    }
+
+    /// Step-3: FTS5 query translation — empty terms produce empty string.
+    func testTranslateToFTS5_emptyTerms() {
+        let result = SQLiteBackend.translateToFTS5([])
+        XCTAssertEqual(result, "")
+    }
+
+    /// Step-3: FTS5 query — `search()` is invoked end-to-end on an
+    /// empty database. Since no data is written (FSEvents sync is
+    /// Step-2 deferred), this asserts the code path does not crash
+    /// and returns gracefully.
+    /// Full round-trip testing with inserted data requires direct
+    /// SQLite3 C API calls which are not available in the test target
+    /// (SwiftPM does not auto-link libsqlite3 into test targets).
+    func testFTS5SearchOnEmptyDBDoesNotCrash() async {
+        let backend = SQLiteBackend()
+        let intent = Intent.findFile(name: nil, dateFilter: nil, kind: nil, terms: ["polyester"])
+        let results = await backend.search(intent: intent, limit: 10)
+        XCTAssertEqual(results.count, 0, "Empty DB should return no results")
+    }
+
+    /// Step-3: search returns empty for non-findFile intents.
+    func testFTS5SearchReturnsEmptyForNonFileIntent() async {
+        let backend = SQLiteBackend()
+        let intent = Intent.ask(query: "hello", contextURLs: [])
+        let results = await backend.search(intent: intent, limit: 20)
+        XCTAssertEqual(results.count, 0)
+    }
+
+    /// Step-3: search returns empty for findFile without terms.
+    func testFTS5SearchReturnsEmptyForNoTerms() async {
+        let backend = SQLiteBackend()
+        let intent = Intent.findFile(name: "test", dateFilter: nil, kind: nil, terms: [])
+        let results = await backend.search(intent: intent, limit: 20)
+        XCTAssertEqual(results.count, 0)
+    }
 }

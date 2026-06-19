@@ -110,8 +110,8 @@ public actor ConnectionDiagnosticService {
     /// mean the URL is reachable — only network errors
     /// (DNS fail, SSL fail, connection refused, timeout)
     /// count as URL-not-reachable.
-    private func checkURLReachable(baseURL: String) async -> Verdict {
-        guard let url = URL(string: baseURL) else {
+    public func checkURLReachable(baseURL: String) async -> Verdict {
+        guard URL(string: baseURL) != nil else {
             return .failed("URL is not parseable")
         }
         // Build a request to a known path. We use the
@@ -161,7 +161,7 @@ public actor ConnectionDiagnosticService {
     /// Step 2: Auth valid. Hit the provider's discovery
     /// endpoint with the user's API key. 200 = auth ok.
     /// 401 = bad key. 403 = key lacks permission.
-    private func checkAuthValid(
+    public func checkAuthValid(
         descriptor: ProviderDescriptor, baseURL: String, apiKey: String
     ) async -> Verdict {
         // Dispatch on the descriptor's discovery strategy
@@ -249,7 +249,7 @@ public actor ConnectionDiagnosticService {
     /// auth), the step passes with a "couldn't verify"
     /// detail — the user shouldn't be blocked at this
     /// step if Step 2 already proved auth works.
-    private func checkModelExists(
+    public func checkModelExists(
         descriptor: ProviderDescriptor, baseURL: String, apiKey: String,
         model: String
     ) async -> Verdict {
@@ -290,7 +290,7 @@ public actor ConnectionDiagnosticService {
     /// catches model-name typos, provider-side rate
     /// limits, and the most common form of "the API
     /// accepted the key but rejected the model".
-    private func checkInferenceWorks(
+    public func checkInferenceWorks(
         descriptor: ProviderDescriptor, baseURL: String, apiKey: String,
         model: String
     ) async -> Verdict {

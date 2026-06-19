@@ -25,14 +25,18 @@ final class SettingsWindowController: NSObject {
         super.init()
         let view = SettingsView(store: store)
         let host = NSHostingController(rootView: view)
-        let style: NSWindow.StyleMask = [.titled, .closable, .miniaturizable]
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 500),
+        // Let the SwiftUI view set the minimum size; don't lock
+        // the window to a preferred size so the user can resize freely.
+        host.sizingOptions = [.minSize]
+        host.view.autoresizingMask = [.width, .height]
+        let style: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 660),
                           styleMask: style,
                           backing: .buffered, defer: false)
         window.contentViewController = host
         window.title = "AI Spotlight Settings"
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 540, height: 360)
+        window.minSize = NSSize(width: 540, height: 480)
         window.center()
         NotificationCenter.default.addObserver(
             self,

@@ -10,196 +10,334 @@ struct SettingsView: View {
     /// would silently do nothing.
     @ObservedObject var store: SettingsStore
     @StateObject private var discovery = LocalModelDiscoveryState()
+    /// Step-4: locally observed copy of enrolled index paths.
+    /// Loaded from IndexingBoundary on appear via .task.
+    /// Step-4: locally observed copy of enrolled index paths.
+    /// Loaded from IndexingBoundary on appear via .task.
+    @State private var observedIndexedPaths: [URL] = []
+    /// Whether a manual scan is currently in progress.
+    @State private var isScanning = false
+    /// Result message from the last scan (e.g. "Scanned 42 files").
+    @State private var scanResultMessage: String?
 
     var body: some View {
-        Form {
-            Section("AI Provider") {
-                Picker("Provider", selection: $store.activeProvider) {
-                    Text("None (rule-based only)").tag("none")
-                    Text("Ollama (local)").tag("ollama")
-                    Text("Custom (any OpenAI-compatible API)").tag("custom")
+        VStack(spacing: 0) {
+            ScrollView(.vertical) {
+                Form {
+                    Section("AI Provider") {
+                    Picker("Provider", selection: $store.activeProvider) {
+                        Text("None (rule-based only)").tag("none")
+                        Text("Ollama (local)").tag("ollama")
+                        Text("Custom (any OpenAI-compatible API)").tag("custom")
+                    }
+                    Text(providerDescription)
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-                Text(providerDescription)
-                    .font(.caption).foregroundStyle(.secondary)
-            }
 
-            if store.activeProvider == "ollama" {
-                Section("Ollama settings") {
-                    HStack(alignment: .center) {
-                        // Picker replaces the freeform text field once the
-                        // user has run discovery; if discovery hasn't
-                        // succeeded we still let them type a custom model.
-                        if discovery.discoveredModels.isEmpty {
-                            TextField("Model", text: $store.ollamaModel, prompt: Text("gemma2:2b"))
+                if store.activeProvider == "ollama" {
+                    Section("Ollama settings") {
+                        HStack(alignment: .center) {
+                            // Picker replaces the freeform text field once the
+                            // user has run discovery; if discovery hasn't
+                            // succeeded we still let them type a custom model.
+                            if discovery.discoveredModels.isEmpty {
+                                TextField("Model", text: $store.ollamaModel, prompt: Text("gemma2:2b"))
+                            } else {
+                                Picker("Model", selection: $store.ollamaModel) {
+                                    ForEach(discovery.discoveredModels, id: \.self) { m in
+                                        Text(m).tag(m)
+                                    }
+                                }
+                            }
+                            Button {
+                                Task { await discovery.detect() }
+                            } label: {
+                                if discovery.isDetecting {
+                                    ProgressView().scaleEffect(0.5).frame(width: 16, height: 16)
+                                } else {
+                                    Text("Detect")
+                                }
+                            }
+                            .disabled(discovery.isDetecting)
+                        }
+                        Text(discoveryStatusLine)
+                            .font(.caption).foregroundStyle(discoveryStatusColor)
+                        Text("Default endpoint: http://localhost:11434")
+                            .font(.caption).foregroundStyle(.secondary)
+                        // Phase 5-D: 4-step diagnostic replaces the
+                        // 1-line "Test Ollama connection" button.
+                        // Same 4-row UI as the Custom section,
+                        // but uses ollamaDiagnosticVerdicts and
+                        // a separate verdict dict so the two
+                        // sections don't clobber each other.
+                        ollamaDiagnosticView
+                    }
+                }
+
+                if store.activeProvider == "custom" {
+                    Section("Custom provider settings") {
+                        // Phase 4.6: cloud-model preset picker. Most
+                        // OpenAI-compatible providers share the
+                        // same /v1/chat/completions endpoint as
+                        // OpenAI's own API, so the user just picks
+                        // a preset, fills in their API key, and
+                        // they're done. We don't lock the fields
+                        // after picking — power users can still
+                        // override the URL or model.
+                        Picker("Preset", selection: $store.selectedPreset) {
+                            ForEach(ProviderPreset.all) { p in
+                                Text(p.displayName).tag(p.id)
+                            }
+                        }
+                        .onChange(of: store.selectedPreset) { _, new in
+                            if let p = ProviderPreset.all.first(where: { $0.id == new }) {
+                                // Pre-fill the URL and model with
+                                // the preset's defaults, but only
+                                // if those fields are still at the
+                                // previous preset's values. This
+                                // way switching back and forth
+                                // between presets doesn't trash the
+                                // user's manual URL edits.
+                                store.applyPreset(p)
+                            }
+                        }
+                        TextField("Base URL", text: $store.customBaseURL, prompt: Text("https://api.openai.com/v1"))
+                        // Phase 5-H: warn the user when their
+                        // customModel is not in the discovered
+                        // catalog. This is exactly the failure
+                        // mode that caused the "deepseek-v4-flash"
+                        // 401: a stale value in UserDefaults that
+                        // DeepSeek governor rejects. We show a
+                        // red banner + a "Reset to first catalog
+                        // entry" button.
+                        if !store.discoveredModels.isEmpty
+                            && !store.discoveredModels.contains(store.customModel)
+                            && !store.useManualModel
+                            && Self.canDiscoverModels(for: store.selectedPreset) {
+                            HStack(alignment: .top, spacing: 8) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.orange)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Model '\(store.customModel)' is not in this provider's catalog")
+                                        .font(.callout.bold())
+                                    Text("Pick a model from the dropdown above, or click Reset to use the first available model.")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    if let first = store.discoveredModels.first {
+                                        Button("Reset to '\(first)'") {
+                                            store.customModel = first
+                                        }
+                                        .controlSize(.small)
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        // Phase 5-B: the model field is now a Picker
+                        // when discovery has populated the list, OR
+                        // a freeform TextField when the user picks
+                        // "Type manually...". The Picker calls
+                        // ModelDiscoveryService on preset change
+                        // (see SettingsStore.applyPreset).
+                        modelField
+                        SecureField("API Key (optional)",
+                                    text: $store.customAPIKey)
+                        // Phase 5-C: 4-step diagnostic replaces the
+                        // single-line testResult UI. Each row shows
+                        // ✓ / ⏳ / ✗ with a precise error message
+                        // for the corresponding step.
+                        diagnosticView
+                    }
+                }
+
+                Section("Content Index") {
+                    // Phase 3.2.2: user picks which categories of files
+                    // get indexed. Defaults are all on (zero-friction).
+                    // Note: only "code" and "rich text" are exposed in the
+                    // MVP. Text/data and PDFs are always indexed — they
+                    // have no privacy angle worth a toggle.
+                    Toggle("Source code files", isOn: $store.indexCodeFiles)
+                        .help("Swift, Python, JS, etc. — turn off for privacy.")
+                    Toggle("Rich text & HTML", isOn: $store.indexRichTextFiles)
+                        .help("RTF, HTML — parsed via NSAttributedString.")
+                }
+
+                Section("Search Backend") {
+                    // Phase 6 Step-3: the SQLite augmentation backend is
+                    // wired into the SearchOrchestrator fan-out when
+                    // this toggle is ON. Today the backend's `search()`
+                    // is a no-op (returns []) and its provider weight
+                    // is 0, so the toggle has no observable effect on
+                    // results. It exists so the wiring point is in
+                    // place when Step-3 ships the FTS5 query
+                    // implementation.
+                    Toggle("SQLite augmentation (experimental)",
+                           isOn: $store.useSQLiteAugmentation)
+                        .help("Add a SQLite FTS5-backed search provider to the fan-out. Step-4: backend is active; add folders in \"Indexed Folders\" to populate the index.")
+                    Text("When enabled, a SQLite FTS5 backend participates in the fan-out alongside MDQuery. Add folders in \"Indexed Folders\" below to populate the index. The SyncService scans enrolled paths every 60 seconds.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Indexed Folders") {
+                    // Step-4: user-managed list of folders to index
+                    // in the SQLite augmentation backend. The SyncService
+                    // scans these paths periodically and writes file
+                    // metadata to the FTS5 index.
+                    VStack(alignment: .leading, spacing: 4) {
+                        if observedIndexedPaths.isEmpty {
+                            Text("No folders indexed yet. Add folders below to enable SQLite-backed search.")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                                .fixedSize(horizontal: false, vertical: true)
                         } else {
-                            Picker("Model", selection: $store.ollamaModel) {
-                                ForEach(discovery.discoveredModels, id: \.self) { m in
-                                    Text(m).tag(m)
+                            let sortedPaths = observedIndexedPaths.sorted { $0.path < $1.path }
+                            ForEach(sortedPaths, id: \.path) { url in
+                                HStack {
+                                    Image(systemName: "folder.fill")
+                                        .foregroundStyle(.blue)
+                                    Text(url.lastPathComponent)
+                                        .font(.caption)
+                                        .lineLimit(1)
+                                    Text(url.deletingLastPathComponent().path)
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Button {
+                                        Task {
+                                            await store.indexingBoundary?.remove(url)
+                                            let remaining = await store.indexingBoundary?.all() ?? []
+                                            observedIndexedPaths = Array(remaining)
+                                            await store.syncService?.updateWatchedPaths(remaining.map { $0.path })
+                                            await store.syncService?.scanNow()
+                                        }
+                                    } label: {
+                                        Image(systemName: "minus.circle.fill")
+                                            .foregroundStyle(.red)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Remove this folder")
                                 }
                             }
                         }
-                        Button {
-                            Task { await discovery.detect() }
-                        } label: {
-                            if discovery.isDetecting {
-                                ProgressView().scaleEffect(0.5).frame(width: 16, height: 16)
-                            } else {
-                                Text("Detect")
-                            }
-                        }
-                        .disabled(discovery.isDetecting)
-                    }
-                    Text(discoveryStatusLine)
-                        .font(.caption).foregroundStyle(discoveryStatusColor)
-                    Text("Default endpoint: http://localhost:11434")
-                        .font(.caption).foregroundStyle(.secondary)
-                    // Phase 5-D: 4-step diagnostic replaces the
-                    // 1-line "Test Ollama connection" button.
-                    // Same 4-row UI as the Custom section,
-                    // but uses ollamaDiagnosticVerdicts and
-                    // a separate verdict dict so the two
-                    // sections don't clobber each other.
-                    ollamaDiagnosticView
-                }
-            }
 
-            if store.activeProvider == "custom" {
-                Section("Custom provider settings") {
-                    // Phase 4.6: cloud-model preset picker. Most
-                    // OpenAI-compatible providers share the
-                    // same /v1/chat/completions endpoint as
-                    // OpenAI's own API, so the user just picks
-                    // a preset, fills in their API key, and
-                    // they're done. We don't lock the fields
-                    // after picking — power users can still
-                    // override the URL or model.
-                    Picker("Preset", selection: $store.selectedPreset) {
-                        ForEach(ProviderPreset.all) { p in
-                            Text(p.displayName).tag(p.id)
+                        HStack(spacing: 8) {
+                            Button {
+                                let panel = NSOpenPanel()
+                                panel.canChooseDirectories = true
+                                panel.canChooseFiles = false
+                                panel.allowsMultipleSelection = true
+                                panel.message = "Select folders to index for faster search results"
+                                guard panel.runModal() == .OK else { return }
+                                Task {
+                                    for url in panel.urls {
+                                        await store.indexingBoundary?.add(url)
+                                    }
+                                    let all = await store.indexingBoundary?.all() ?? []
+                                    observedIndexedPaths = Array(all)
+                                    await store.syncService?.updateWatchedPaths(all.map { $0.path })
+                                    await store.syncService?.scanNow()
+                                }
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "plus.circle.fill")
+                                    Text("Add Folder...")
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+
+                            Button {
+                                Task {
+                                    isScanning = true
+                                    scanResultMessage = nil
+                                    await store.syncService?.scanNow()
+                                    isScanning = false
+                                    // Show a brief success message
+                                    let count = observedIndexedPaths.count
+                                    scanResultMessage = "Scan complete (\(count) folder\(count == 1 ? "" : "s"))"
+                                    // Clear the message after 3 seconds
+                                    Task {
+                                        try? await Task.sleep(nanoseconds: 3_000_000_000)
+                                        scanResultMessage = nil
+                                    }
+                                }
+                            } label: {
+                                HStack(spacing: 4) {
+                                    if isScanning {
+                                        ProgressView()
+                                            .scaleEffect(0.6)
+                                            .frame(width: 14, height: 14)
+                                    } else {
+                                        Image(systemName: "arrow.clockwise")
+                                    }
+                                    Text(isScanning ? "Scanning..." : "Scan Now")
+                                }
+                            }
+                            .disabled(isScanning)
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .help("Trigger an immediate scan of all indexed folders")
                         }
-                    }
-                    .onChange(of: store.selectedPreset) { _, new in
-                        if let p = ProviderPreset.all.first(where: { $0.id == new }) {
-                            // Pre-fill the URL and model with
-                            // the preset's defaults, but only
-                            // if those fields are still at the
-                            // previous preset's values. This
-                            // way switching back and forth
-                            // between presets doesn't trash the
-                            // user's manual URL edits.
-                            store.applyPreset(p)
+
+                        if let msg = scanResultMessage {
+                            Text(msg)
+                                .font(.caption)
+                                .foregroundStyle(.green)
                         }
+
+                        Text("Files inside indexed folders are searchable through the SQLite FTS5 backend. Sync runs every 60 seconds.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    TextField("Base URL", text: $store.customBaseURL, prompt: Text("https://api.openai.com/v1"))
-                    // Phase 5-H: warn the user when their
-                    // customModel is not in the discovered
-                    // catalog. This is exactly the failure
-                    // mode that caused the "deepseek-v4-flash"
-                    // 401: a stale value in UserDefaults that
-                    // DeepSeek governor rejects. We show a
-                    // red banner + a "Reset to first catalog
-                    // entry" button.
-                    if !store.discoveredModels.isEmpty
-                        && !store.discoveredModels.contains(store.customModel)
-                        && !store.useManualModel
-                        && Self.canDiscoverModels(for: store.selectedPreset) {
+                }
+
+
+
+
+
+                Section("Hotkey") {
+                    KeyboardShortcuts.Recorder("Toggle AI Spotlight:",
+                                              name: HotkeyService.togglePanelName)
+                    // Phase 4.3.3: the hotkey requires Accessibility
+                    // permission. Without it, ⌘+Space won't reach
+                    // our app — macOS Spotlight will steal it (or
+                    // nothing happens). Show a button to open
+                    // System Settings so the user can grant
+                    // permission in one click.
+                    if !AXIsProcessTrusted() {
                         HStack(alignment: .top, spacing: 8) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundStyle(.orange)
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("Model '\(store.customModel)' is not in this provider's catalog")
+                                Text("Accessibility permission required")
                                     .font(.callout.bold())
-                                Text("Pick a model from the dropdown above, or click Reset to use the first available model.")
-                                    .font(.caption).foregroundStyle(.secondary)
+                                Text("Click the button below to open System Settings → Privacy & Security → Accessibility, then toggle AI Spotlight on. The hotkey won't work until you do.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                                     .fixedSize(horizontal: false, vertical: true)
-                                if let first = store.discoveredModels.first {
-                                    Button("Reset to '\(first)'") {
-                                        store.customModel = first
+                                Button("Open System Settings") {
+                                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                                        NSWorkspace.shared.open(url)
                                     }
-                                    .controlSize(.small)
                                 }
+                                .controlSize(.small)
                             }
                         }
                         .padding(.vertical, 4)
                     }
-                    // Phase 5-B: the model field is now a Picker
-                    // when discovery has populated the list, OR
-                    // a freeform TextField when the user picks
-                    // "Type manually...". The Picker calls
-                    // ModelDiscoveryService on preset change
-                    // (see SettingsStore.applyPreset).
-                    modelField
-                    SecureField("API key (leave blank for providers that don't require one)",
-                                text: $store.customAPIKey)
-                    // Phase 5-C: 4-step diagnostic replaces the
-                    // single-line testResult UI. Each row shows
-                    // ✓ / ⏳ / ✗ with a precise error message
-                    // for the corresponding step.
-                    diagnosticView
-                }
-            }
+                    Text("Default: ⌘+Space. If ⌘+Space also opens macOS Spotlight, " +
+                         "disable it in System Settings → Keyboard → Keyboard Shortcuts " +
+                         "→ Spotlight → uncheck \"Show Spotlight search\".")
+                        .font(.caption).foregroundStyle(.secondary)
 
-            Section("Content Index") {
-                // Phase 3.2.2: user picks which categories of files
-                // get indexed. Defaults are all on (zero-friction).
-                // Note: only "code" and "rich text" are exposed in the
-                // MVP. Text/data and PDFs are always indexed — they
-                // have no privacy angle worth a toggle.
-                Toggle("Source code files", isOn: $store.indexCodeFiles)
-                    .help("Swift, Python, JS, etc. — turn off for privacy.")
-                Toggle("Rich text & HTML", isOn: $store.indexRichTextFiles)
-                    .help("RTF, HTML — parsed via NSAttributedString.")
-            }
+                }  // Section("Hotkey")
+            }  // Form
+            .padding(20)
+        }  // ScrollView
 
-            Section("Hotkey") {
-                KeyboardShortcuts.Recorder("Toggle AI Spotlight:",
-                                          name: HotkeyService.togglePanelName)
-                // Phase 4.3.3: the hotkey requires Accessibility
-                // permission. Without it, ⌘+Space won't reach
-                // our app — macOS Spotlight will steal it (or
-                // nothing happens). Show a button to open
-                // System Settings so the user can grant
-                // permission in one click.
-                if !AXIsProcessTrusted() {
-                    HStack(alignment: .top, spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Accessibility permission required")
-                                .font(.callout.bold())
-                            Text("Click the button below to open System Settings → Privacy & Security → Accessibility, then toggle AI Spotlight on. The hotkey won't work until you do.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Button("Open System Settings") {
-                                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-                                    NSWorkspace.shared.open(url)
-                                }
-                            }
-                            .controlSize(.small)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-                Text("Default: ⌘+Space. If ⌘+Space also opens macOS Spotlight, " +
-                     "disable it in System Settings → Keyboard → Keyboard Shortcuts " +
-                     "→ Spotlight → uncheck \"Show Spotlight search\".")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
-        .padding(20)
-        // Phase 4.6: the Settings UI grew with cloud-model
-        // presets, model size warnings, and the test-
-        // connection button. The old fixed 480x500 frame
-        // clipped the URL field, the preset dropdown
-        // labels (e.g. "ByteDance Doubao (豆包)"), and the
-        // accessibility-permission warning. We now use
-        // ScrollView + ideal width/height so the window
-        // fits the content but can also be resized if
-        // the user prefers a larger layout. The ideal
-        // values are larger than the old fixed values.
-        .frame(minWidth: 540, maxWidth: .infinity)
-        .safeAreaInset(edge: .bottom) {
+            Divider()
+
             HStack {
                 Spacer()
                 Button("Done") { dismissWindow() }
@@ -207,6 +345,12 @@ struct SettingsView: View {
             }
             .padding(.horizontal, 20).padding(.vertical, 10)
             .background(.bar)
+        }
+        .frame(minWidth: 540, idealWidth: 620, maxWidth: .infinity,
+               minHeight: 400, idealHeight: 620, maxHeight: .infinity)
+
+        .task {
+            observedIndexedPaths = Array(await store.indexingBoundary?.all() ?? [])
         }
     }
 

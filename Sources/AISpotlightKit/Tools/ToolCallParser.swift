@@ -17,7 +17,7 @@ import Foundation
 public enum ToolCallParser {
 
     /// A parsed tool call from the LLM.
-    public struct ToolCall: Sendable {
+    public struct ToolCall: @unchecked Sendable {
         public let tool: String
         public let args: [String: Any]
     }

@@ -17,13 +17,14 @@ public final class FileSystemProvider: SearchProvider, @unchecked Sendable {
             return []
         }
         // B3: always release the query, even on early returns.
+        // CRITICAL: defer blocks execute in LIFO order — release (declare FIRST, run LAST)
+        // must be declared BEFORE stop so that stop runs first on scope exit.
         defer {
-            MDQueryStop(mdq)
-        }
-        defer {
-            // MDQueryCreate returns a CFTypeRef (actually an MDQuery). Cast back and release.
             let raw = Unmanaged.passUnretained(mdq).toOpaque()
             Unmanaged<CFTypeRef>.fromOpaque(raw).release()
+        }
+        defer {
+            MDQueryStop(mdq)
         }
 
         MDQueryExecute(mdq, CFOptionFlags(kMDQuerySynchronous.rawValue))
@@ -49,7 +50,7 @@ public final class FileSystemProvider: SearchProvider, @unchecked Sendable {
                 iconSystemName: "doc",
                 url: url,
                 kind: .file,
-                score: Double(count - i)
+                score: count > 0 ? Double(count - i) / Double(count) : 0
             ))
         }
         return results

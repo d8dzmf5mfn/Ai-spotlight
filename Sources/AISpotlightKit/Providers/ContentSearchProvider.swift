@@ -52,14 +52,16 @@ public final class ContentSearchProvider: SearchProvider, @unchecked Sendable {
         guard let mdq = MDQueryCreate(kCFAllocatorDefault, query as CFString, nil, nil) else {
             return []
         }
+        // CRITICAL: defer blocks execute in LIFO order — release (declare FIRST, run LAST)
+        // must be declared BEFORE stop so that stop runs first on scope exit.
+        // The previous code had release declared second, causing it to run first
+        // (LIFO), which freed the MDQuery before MDQueryStop could use it.
         defer {
-            MDQueryStop(mdq)
-        }
-        defer {
-            // MDQueryCreate returns a CFTypeRef. Balance the retain
-            // it does with an explicit release.
             let raw = Unmanaged.passUnretained(mdq).toOpaque()
             Unmanaged<CFTypeRef>.fromOpaque(raw).release()
+        }
+        defer {
+            MDQueryStop(mdq)
         }
 
         // Synchronous execute. MDQuery's API is C-style and
@@ -83,10 +85,9 @@ public final class ContentSearchProvider: SearchProvider, @unchecked Sendable {
                 iconSystemName: "doc.text.magnifyingglass",
                 url: url,
                 kind: .file,
-                // Content matches get a high base score so they
-                // rank above filename matches — the user asked
-                // for content, not for a file with that name.
-                score: Double(count - i) + 100,
+                // Score normalized to [0,1]. Provider weight in ResultMerger
+                // controls the cross-provider ranking (content > files by default).
+                score: count > 0 ? Double(count - i) / Double(count) : 0,
                 contentSnippet: "Content match: \(terms.joined(separator: ", "))"
             ))
         }

@@ -45,6 +45,9 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
     /// bug — SettingsStore was being deallocated.
     var settings: SettingsStore!
     var settingsWindow: SettingsWindowController!
+    /// Step-2: file sync service for SQLite augmentation.
+    /// Keep alive for the process lifetime.
+    var syncService: SyncService?
 
     override init() {
         super.init()
@@ -195,15 +198,50 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
         if result == .timedOut {
             Log.write("tool registry registration TIMED OUT after 5s; tools may not be available")
         } else {
-            Log.write("tool registry: 3 tools registered")
+            Log.write("tool registry: 7 tools registered (search_files, open_file, list_apps, run_shell, read_file, clipboard_get, clipboard_set)")
         }
 
-let orchestrator = SearchOrchestrator(providers: [
-            FileSystemProvider(),
-            AppProvider(),
-            contentProvider,
-        ])
-        state = AppState(interpreter: interpreter, orchestrator: orchestrator, llmService: llmService, toolRegistry: toolRegistry)
+// Phase 6 Step-3: the SQLite augmentation backend is added to
+// the provider list when `settings.useSQLiteAugmentation` is true.
+// Today the backend's `search()` is a no-op (returns []) and its
+// provider weight in `ResultMerger` is 0, so the flag has no
+// observable effect on results. The wiring exists so that
+// Step-3's FTS5 query implementation lands in an already-wired
+// pipeline.
+var searchProviders: [any SearchProvider] = [
+    FileSystemProvider(),
+    AppProvider(),
+    contentProvider,
+]
+if settings.useSQLiteAugmentation {
+    searchProviders.append(SQLiteBackend())
+}
+
+// Step-2: start the file sync service for SQLite augmentation.
+// Creates an IndexingBoundary (persisted set of enrolled paths)
+// and a SyncService that scans and writes file metadata to the
+// SQLite DB. The boundary is persisted next to the SQLite file.
+//
+// Enrolled paths default to empty — users add them in Settings.
+// Until at least one path is enrolled, sync is a no-op.
+let boundaryPath = SQLiteBackend.databaseURL
+    .deletingLastPathComponent()
+    .appendingPathComponent("indexing_boundary.json")
+let boundary = IndexingBoundary(storageURL: boundaryPath)
+let syncService = SyncService(boundary: boundary, dbURL: SQLiteBackend.databaseURL)
+self.syncService = syncService
+// Start sync in background after a short delay so the UI
+// launches faster on first run.
+Task {
+    try? await Task.sleep(nanoseconds: 2_000_000_000)  // 2s delay
+    await syncService.start()
+}
+Log.write("[main] sync service initialized, boundary at \(boundaryPath.path)")
+        settings.indexingBoundary = boundary
+        settings.syncService = syncService
+
+let orchestrator = SearchOrchestrator(providers: searchProviders)
+        state = AppState(interpreter: interpreter, orchestrator: orchestrator, llmService: llmService, toolRegistry: toolRegistry, indexingBoundary: boundary)
 
         // Start indexing in the background after a short delay
         // Phase 4.2.10: removed the IndexManager initial-walk.

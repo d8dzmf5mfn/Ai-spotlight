@@ -129,6 +129,10 @@ final class AppState: ObservableObject {
     /// Phase 4.3.2: the tool registry the LLM can call. Wired
     /// in from main.swift. Set to `nil` to disable tool use.
     private let toolRegistry: LLMToolRegistry
+    /// Step-4: index boundary for managing enrolled paths.
+    /// Shared with SyncService so Settings changes are visible.
+    /// Stored in AppState so SettingsView can access it.
+    private(set) var indexingBoundary: IndexingBoundary? = nil
 
     private let interpreter: QueryInterpreter
     private let orchestrator: SearchOrchestrator
@@ -143,11 +147,13 @@ final class AppState: ObservableObject {
     init(interpreter: QueryInterpreter,
          orchestrator: SearchOrchestrator,
          llmService: LLMConversationService? = nil,
-        toolRegistry: LLMToolRegistry = LLMToolRegistry()) {
+        toolRegistry: LLMToolRegistry = LLMToolRegistry(),
+        indexingBoundary: IndexingBoundary? = nil) {
         self.interpreter = interpreter
         self.orchestrator = orchestrator
         self.llmService = llmService
         self.toolRegistry = toolRegistry
+        self.indexingBoundary = indexingBoundary
         // Phase 4.2.6 (P2): listen for Ollama.app termination.
         // We use NSWorkspace's notification center to detect when
         // the user explicitly Cmd+Q's Ollama (or quits it via
@@ -218,7 +224,11 @@ final class AppState: ObservableObject {
         debounceTimer?.invalidate()
         debounceTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: false) { [weak self] _ in
             guard let self else { return }
-            self.searchTask = Task { await self.runSearch(newQuery) }
+            let q = newQuery
+            let task = Task { await self.runSearch(q) }
+            Task { @MainActor in
+                self.searchTask = task
+            }
         }
     }
 
@@ -360,12 +370,13 @@ final class AppState: ObservableObject {
         if useTools {
             llmTask = Task { [weak self] in
                 do {
+                    guard let self else { return }
                     let context = await LLMContext.from(urls: contextURLs)
                     let result = try await service.askWithTools(
                         query: query,
                         history: historySnapshot,
                         context: context,
-                        registry: toolRegistry,
+                        registry: self.toolRegistry,
                         maxToolTurns: 2
                     ) { toolName in
                         // Phase 4.4: set the current tool name
@@ -373,7 +384,7 @@ final class AppState: ObservableObject {
                         // progress indicator. Cleared when the
                         // loop returns (or the catch block fires).
                         await MainActor.run {
-                            guard let self, self.llmGeneration == currentGeneration else { return }
+                            guard self.llmGeneration == currentGeneration else { return }
                             self.currentToolName = toolName
                         }
                     } onConsentNeeded: { tool, args in
@@ -383,13 +394,14 @@ final class AppState: ObservableObject {
                         // the published pendingConsent state.
                         // We suspend until the user clicks
                         // Allow or Deny, then resume.
-                        return await self?.requestUserConsent(
+                        // Explicit strong capture avoids Sendable closure warning
+                        return await self.requestUserConsent(
                             tool: tool, args: args
-                        ) ?? false
+                        )
                     }
                     if Task.isCancelled { return }
                     await MainActor.run {
-                        guard let self, self.llmGeneration == currentGeneration else { return }
+                        guard self.llmGeneration == currentGeneration else { return }
                         self.toolTrace = result.toolCalls.map { call in
                             "🔧 \(call.tool): \(call.summary)"
                         }
@@ -408,10 +420,11 @@ final class AppState: ObservableObject {
                     }
                     Log.write("[AppState] runLLMAsk: tool flow done, toolCalls=\(result.toolCalls.count), replyLength=\(result.finalAnswer.count)")
                 } catch {
+                    guard let self else { return }
                     let classified = Self.classifyLLMError(error)
                     let errMsg = classified.message
                     await MainActor.run {
-                        guard let self, self.llmGeneration == currentGeneration else { return }
+                        guard self.llmGeneration == currentGeneration else { return }
                         self.currentToolName = nil
                         if Self.isURLCancelled(error) {
                             self.isLLMBusy = false
@@ -579,7 +592,7 @@ final class AppState: ObservableObject {
         }
         // CocoaError(.userCancelled) is the other path URLSession
         // can take.
-        if let cocoa = error as? CocoaError, cocoa.code == .userCancelledError {
+        if let cocoa = error as? CocoaError, cocoa.code == .userCancelled {
             return true
         }
         return false

@@ -29,7 +29,7 @@ public enum Log {
     /// during Phase 4.1 bring-up.
     public static func write(_ msg: String) {
         let line = "\(Date()) \(msg)\n"
-        guard let h = try? FileHandle(forWritingAtPath: url.path) else { return }
+        guard let h = FileHandle(forWritingAtPath: url.path) else { return }
         h.seekToEndOfFile()
         h.write(Data(line.utf8))
         try? h.synchronize()  // force fsync

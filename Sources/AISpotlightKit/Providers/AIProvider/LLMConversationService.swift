@@ -395,7 +395,7 @@ public final class LLMConversationService: @unchecked Sendable {
     /// AppState shows these in the UI as "Used search_files:
     /// Found 5 files matching 'polyester'" so the user knows
     /// what the AI did.
-    public struct ExecutedToolCall: Sendable {
+    public struct ExecutedToolCall: @unchecked Sendable {
         public let tool: String
         public let args: [String: Any]
         public let summary: String

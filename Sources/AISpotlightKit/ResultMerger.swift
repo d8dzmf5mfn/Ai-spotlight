@@ -3,27 +3,23 @@ import Foundation
 /// Merges result buckets from multiple providers into a single
 /// ranked list.
 ///
-/// Phase 6 Step-1.5 (ranking stabilization): the merge now takes
-/// provider-tagged buckets (`[(ProviderID, [SearchResult])]`) so it
-/// can apply a per-provider weight. The weight compensates for the
-/// fact that the three providers assign raw scores on incompatible
-/// scales:
-///   - `FileSystemProvider`   — 0..N-1
-///   - `ContentSearchProvider` — 100..100+N-1 (+100 base boost)
-///   - `AppProvider`          — 10 or 100 + N
-/// Without a weight, the `ContentSearch` +100 base makes its
-/// results always outrank `FileSystem` results, and the
-/// `AppProvider` prefix-boost (also +100) collides with
-/// `ContentSearch`'s base boost. See `docs/AUDIT_2026-06-17.md`
-/// §11.2 for the full breakdown.
+/// TODO-11: All provider scores are now normalized to [0, 1] before
+/// entering the merger. The per-provider weight therefore controls the
+/// actual cross-provider ranking:
+///   - `contentSearch` (weight 1.2) outranks `fileSystem` (weight 1.0)
+///   - `app` (weight 1.1) sits between content and files
+///   - `sqliteAugmentation` (weight 1.0) ranks alongside files
 ///
-/// **The weight here is a *soft* normalization, not a contract.**
-/// It controls provider-level dominance but does not unify the
-/// underlying score semantics. A real ranking contract (TODO-11)
-/// is a separate, larger change.
+/// Without this normalization, `ContentSearch` used +100 base boost
+/// and `AppProvider` used +100 prefix boost, making it impossible for
+/// weights to meaningfully reorder results.
 public enum ResultMerger {
     /// Merge provider-tagged buckets, dedup by URL (keep higher
     /// weighted score), sort by weighted score descending.
+    ///
+    /// Step-5: dedup handles the case where the same file appears
+    /// from both MDQuery (FileSystem/ContentSearch) and SQLite
+    /// augmentation. The higher weighted score wins.
     ///
     /// Bucket shape changed from `[[SearchResult]]` to
     /// `[(ProviderID, [SearchResult])]` so the merger can identify
@@ -70,18 +66,18 @@ public enum ResultMerger {
         return sorted
     }
 
-    /// Per-provider ranking weight. Tuned so that:
-    ///   - a top `FileSystem` match (raw ~20) becomes weighted ~20
-    ///   - a top `ContentSearch` match (raw ~120) becomes weighted ~144
-    ///   - a top `AppProvider` prefix match (raw ~100+N) becomes weighted ~110
-    /// This preserves the "content > filename > apps" intent that
-    /// the +100 hard-coded boost encoded, but with a *tunable*
-    /// surface instead of a hard-coded magic number.
+    /// Per-provider ranking weight. All scores are normalized to [0, 1]
+    /// so the weight directly controls cross-provider ordering:
+    ///   - `contentSearch` (1.2) — content matches > file name matches
+    ///   - `app` (1.1) — app prefix matches rank between content and files
+    ///   - `fileSystem` (1.0) — baseline
+    ///   - `sqliteAugmentation` (1.0) — alongside file system results
     static func providerWeight(_ provider: ProviderID) -> Double {
         switch provider {
-        case .fileSystem:   return 1.0
-        case .contentSearch: return 1.2
-        case .app:          return 1.1
+        case .fileSystem:         return 1.0
+        case .contentSearch:       return 1.2
+        case .app:                 return 1.1
+        case .sqliteAugmentation:  return 1.0   // Step-3: SQLite augmentation matches are enrolled/indexed files — rank alongside file system results
         }
     }
 }

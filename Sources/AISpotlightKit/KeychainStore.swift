@@ -72,7 +72,7 @@ public final class KeychainStore: KeychainStoring, @unchecked Sendable {
     }
 
     public func delete(_ key: String) throws {
-        try lock.withLock {
+        lock.withLock {
             let query: [String: Any] = [
                 kSecClass as String: kSecClassGenericPassword,
                 kSecAttrService as String: service,
@@ -88,7 +88,7 @@ public final class InMemoryKeychain: KeychainStoring, @unchecked Sendable {
     private var store: [String: String] = [:]
     private let lock = OSAllocatedUnfairLock()
     public init() {}
-    public func set(_ v: String, for k: String) throws { lock.withLock { store[k] = v } }
+    public func set(_ v: String, for k: String) throws { lock.withLock { _ in store[k] = v } }
     public func get(_ k: String) throws -> String? { lock.withLock { store[k] } }
-    public func delete(_ k: String) throws { lock.withLock { store.removeValue(forKey: k) } }
+    public func delete(_ k: String) throws { lock.withLock { _ = store.removeValue(forKey: k) } }
 }

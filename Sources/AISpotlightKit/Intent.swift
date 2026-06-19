@@ -14,6 +14,23 @@ public enum Intent: Equatable, Codable, Sendable {
     /// passes the top hits to the LLM).
     case ask(query: String, contextURLs: [URL] = [])
     case unknown(raw: String)
+    
+    /// Short description for logging. Returns the intent type
+    /// and first few chars of the query/name if applicable.
+    public var shortDescription: String {
+        switch self {
+        case .openApp(let name): return "openApp(\(name))"
+        case .findFile(let name, _, _, let terms): 
+            let t = terms.prefix(3).joined(separator: ", ")
+            return "findFile(name=\(name ?? "nil"), terms=[\(t)])"
+        case .ask(let query, _): 
+            let q = query.count > 30 ? String(query.prefix(30)) + "..." : query
+            return "ask(\(q))"
+        case .unknown(let raw):
+            let r = raw.count > 20 ? String(raw.prefix(20)) + "..." : raw
+            return "unknown(\(r))"
+        }
+    }
 
     /// Convenience for "no intent matched" — same as `.unknown(raw: "")`.
     public static let fallback = Intent.unknown(raw: "")

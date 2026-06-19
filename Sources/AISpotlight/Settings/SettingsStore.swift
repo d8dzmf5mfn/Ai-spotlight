@@ -23,7 +23,15 @@ final class SettingsStore: ObservableObject {
 
     // MARK: AI provider
     @Published var activeProvider: String {
-        didSet { defaults.set(activeProvider, forKey: Self.kProvider) }
+        didSet {
+            defaults.set(activeProvider, forKey: Self.kProvider)
+            // Phase 5-G: pushing the config when the provider changes ensures
+            // the running provider switches to the new provider's settings
+            // (e.g. ollama → custom). Without this, the live provider
+            // retains the previous provider's config.model, which is the
+            // root cause of the 'deepseek-v4-flash' governor 401 bug.
+            pushConfigToProvider()
+        }
     }
     @Published var customBaseURL: String {
         didSet {
@@ -83,7 +91,7 @@ final class SettingsStore: ObservableObject {
             return
         }
         guard let newConfig = resolveConfig() else {
-            Log.write("[SettingsStore] pushConfigToProvider: resolveConfig returned nil (activeProvider=custom but URL or model is empty)")
+            Log.write("[SettingsStore] pushConfigToProvider: resolveConfig returned nil for activeProvider=\(activeProvider)")
             return
         }
         Log.write("[SettingsStore] pushConfigToProvider: pushing model=\(newConfig.model) baseURL=\(newConfig.baseURL.absoluteString)")
@@ -198,7 +206,12 @@ final class SettingsStore: ObservableObject {
 
     // MARK: Ollama-specific (shared defaults with custom; user can override)
     @Published var ollamaModel: String {
-        didSet { defaults.set(ollamaModel, forKey: Self.kOllama) }
+        didSet {
+            defaults.set(ollamaModel, forKey: Self.kOllama)
+            // Phase 5-G: pushing the config when the Ollama model changes ensures
+            // the live provider uses the updated model name for inference.
+            pushConfigToProvider()
+        }
     }
 
     // MARK: Index allow-list (Phase 3.2.2)
@@ -212,6 +225,30 @@ final class SettingsStore: ObservableObject {
         didSet { defaults.set(indexRichTextFiles, forKey: Self.kIndexRich) }
     }
 
+    // MARK: Phase 6 Step-3: search backend augmentation
+    /// Whether to include `SQLiteBackend` in the fan-out when
+    /// `SearchOrchestrator` runs. Default OFF. When OFF, the
+    /// orchestrator fans out to the original three providers
+    /// (FileSystem, Content, Apps). When ON, the orchestrator
+    /// also includes the SQLite augmentation backend; today the
+    /// backend's `search()` is a no-op (returns []) and its
+    /// provider weight is 0, so this flag has no observable
+    /// effect yet. The flag exists so that the wiring point is
+    /// in place when Step-3 ships the FTS5 query implementation.
+    @Published var useSQLiteAugmentation: Bool {
+        didSet { defaults.set(useSQLiteAugmentation, forKey: Self.kUseSQLite) }
+    }
+
+    /// Step-4: the IndexingBoundary for managing enrolled paths.
+    /// Set by main.swift after creation. SettingsView uses this
+    /// to let the user add/remove indexed directories.
+    var indexingBoundary: IndexingBoundary?
+
+    /// Step-4: reference to the SyncService for manual scan triggering.
+    /// Set by main.swift after creation. SettingsView uses this
+    /// to let the user trigger an immediate re-scan.
+    var syncService: SyncService?
+
     init(keychain: KeychainStoring = KeychainStore()) {
         self.keychain = keychain
         // user decision: open-box, no key needed by default
@@ -223,10 +260,16 @@ final class SettingsStore: ObservableObject {
         // Default both ON — zero-friction: the user opts out.
         self.indexCodeFiles = defaults.object(forKey: Self.kIndexCode) as? Bool ?? true
         self.indexRichTextFiles = defaults.object(forKey: Self.kIndexRich) as? Bool ?? true
+        // Default ON — Step-4: SQLite augmentation is active.
+        // The backend participates in search fan-out alongside
+        // MDQuery. Users can disable it here or manage indexed
+        // folders in the "Indexed Folders" section.
+        self.useSQLiteAugmentation = defaults.object(forKey: Self.kUseSQLite) as? Bool ?? true
     }
 
     private static let kIndexCode = "indexCodeFiles"
     private static let kIndexRich = "indexRichTextFiles"
+    private static let kUseSQLite = "useSQLiteAugmentation"
 
     /// Resolve the active configuration into a concrete `AIConfig` value that
     /// the AIFactory can consume. `none` → nil (caller falls back to rules).
@@ -295,20 +338,33 @@ final class SettingsStore: ObservableObject {
         isRunningDiagnostic = true
         defer { isRunningDiagnostic = false }
         let service = ConnectionDiagnosticService()
-        // We want progressive UI updates. The actor returns
-        // the final dictionary at the end (because it
-        // short-circuits on first failure), but we want
-        // each step to flip from ⏳ to ✓/✗ as it completes.
-        // Easiest path: run each step in a wrapper that
-        // publishes to the store. For now we just publish
-        // at the end (Phase 5-D will add streaming).
-        let results = await service.diagnose(
-            descriptor: descriptor,
-            baseURL: baseURL,
-            apiKey: customAPIKey,
+        // Step-1: URL reachable
+        diagnosticVerdicts[.urlReachable] = .running
+        let v1 = await service.checkURLReachable(baseURL: baseURL)
+        diagnosticVerdicts[.urlReachable] = v1
+        if case .failed = v1 { return }
+        // Step-2: Auth valid
+        diagnosticVerdicts[.authValid] = .running
+        let v2 = await service.checkAuthValid(
+            descriptor: descriptor, baseURL: baseURL, apiKey: customAPIKey
+        )
+        diagnosticVerdicts[.authValid] = v2
+        if case .failed = v2 { return }
+        // Step-3: Model exists
+        diagnosticVerdicts[.modelExists] = .running
+        let v3 = await service.checkModelExists(
+            descriptor: descriptor, baseURL: baseURL, apiKey: customAPIKey,
             model: customModel
         )
-        diagnosticVerdicts = results
+        diagnosticVerdicts[.modelExists] = v3
+        if case .failed = v3 { return }
+        // Step-4: Inference works
+        diagnosticVerdicts[.inferenceWorks] = .running
+        let v4 = await service.checkInferenceWorks(
+            descriptor: descriptor, baseURL: baseURL, apiKey: customAPIKey,
+            model: customModel
+        )
+        diagnosticVerdicts[.inferenceWorks] = v4
     }
 
     /// Phase 5-D: 4-step diagnostic for the Ollama
@@ -335,12 +391,32 @@ final class SettingsStore: ObservableObject {
         isRunningOllamaDiagnostic = true
         defer { isRunningOllamaDiagnostic = false }
         let service = ConnectionDiagnosticService()
-        let results = await service.diagnose(
-            descriptor: descriptor,
-            baseURL: baseURL,
-            apiKey: "",
+        // Step-1: URL reachable
+        ollamaDiagnosticVerdicts[.urlReachable] = .running
+        let v1 = await service.checkURLReachable(baseURL: baseURL)
+        ollamaDiagnosticVerdicts[.urlReachable] = v1
+        if case .failed = v1 { return }
+        // Step-2: Auth valid (Ollama uses no API key)
+        ollamaDiagnosticVerdicts[.authValid] = .running
+        let v2 = await service.checkAuthValid(
+            descriptor: descriptor, baseURL: baseURL, apiKey: ""
+        )
+        ollamaDiagnosticVerdicts[.authValid] = v2
+        if case .failed = v2 { return }
+        // Step-3: Model exists
+        ollamaDiagnosticVerdicts[.modelExists] = .running
+        let v3 = await service.checkModelExists(
+            descriptor: descriptor, baseURL: baseURL, apiKey: "",
             model: ollamaModel
         )
-        ollamaDiagnosticVerdicts = results
+        ollamaDiagnosticVerdicts[.modelExists] = v3
+        if case .failed = v3 { return }
+        // Step-4: Inference works
+        ollamaDiagnosticVerdicts[.inferenceWorks] = .running
+        let v4 = await service.checkInferenceWorks(
+            descriptor: descriptor, baseURL: baseURL, apiKey: "",
+            model: ollamaModel
+        )
+        ollamaDiagnosticVerdicts[.inferenceWorks] = v4
     }
 }
