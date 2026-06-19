@@ -18,6 +18,7 @@ final class SettingsStore: ObservableObject {
     private static let kBaseURL  = "customBaseURL"
     private static let kModel     = "customModel"
     private static let kOllama    = "ollamaModel"
+    private static let kAppMode  = "appModeEnabled"
     private static let kKeychain  = "custom_api_key"
     let keychain: KeychainStoring
 
@@ -205,6 +206,11 @@ final class SettingsStore: ObservableObject {
     }
 
     // MARK: Ollama-specific (shared defaults with custom; user can override)
+    @Published var isAppModeEnabled: Bool {
+        didSet {
+            defaults.set(isAppModeEnabled, forKey: Self.kAppMode)
+        }
+    }
     @Published var ollamaModel: String {
         didSet {
             defaults.set(ollamaModel, forKey: Self.kOllama)
@@ -255,7 +261,8 @@ final class SettingsStore: ObservableObject {
         self.activeProvider = defaults.string(forKey: Self.kProvider) ?? "none"
         self.customBaseURL  = defaults.string(forKey: Self.kBaseURL)  ?? "https://api.openai.com/v1"
         self.customModel     = defaults.string(forKey: Self.kModel)     ?? "gpt-4o-mini"
-        self.ollamaModel     = defaults.string(forKey: Self.kOllama)    ?? "gemma2:2b"
+        self.ollamaModel     = defaults.string(forKey: Self.kOllama)             ?? "gemma2:2b"
+        self.isAppModeEnabled = defaults.bool(forKey: Self.kAppMode)
         self.customAPIKey    = (try? keychain.get(Self.kKeychain)) ?? ""
         // Default both ON — zero-friction: the user opts out.
         self.indexCodeFiles = defaults.object(forKey: Self.kIndexCode) as? Bool ?? true

@@ -106,6 +106,8 @@ final class AppState: ObservableObject {
     /// the user can press Enter to open it — no copy-paste
     /// and no "go find the file yourself" flow.
     @Published var llmReplyPaths: [URL] = []
+    /// True when panel is in app mode (wide enough to preserve history).
+    @Published var isAppMode: Bool = false
 
     /// Phase 4.4: name of the tool currently running, if any.
     /// Set by runLLMAsk before the tool handler runs, cleared
@@ -230,6 +232,19 @@ final class AppState: ObservableObject {
                 self.searchTask = task
             }
         }
+    }
+
+
+    /// Clear LLM conversation state. Called when the panel reopens
+    /// (unless app mode is active).
+    func clearLLMState() {
+        llmHistory.removeAll()
+        llmReply = nil
+        llmError = nil
+        llmErrorKind = nil
+        toolTrace.removeAll()
+        llmReplyPaths.removeAll()
+        currentToolName = nil
     }
 
     private func runSearch(_ q: String) async {

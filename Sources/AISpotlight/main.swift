@@ -265,12 +265,33 @@ let orchestrator = SearchOrchestrator(providers: searchProviders)
         let host = NSHostingController(rootView: SearchWindowView(state: state))
         panel = SpotlightPanel()
         panel.contentViewController = host
+        // Track panel resize to detect app mode threshold
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification,
+            object: panel,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor in
+                let wide = self.panel.frame.width > 900
+                let enabled = self.settings.isAppModeEnabled
+                self.state.isAppMode = enabled && wide
+            }
+        }
 
         let toggleAction: () -> Void = { [weak self] in
             guard let self else { return }
-            self.state.query = ""
-            self.state.results = []
-            self.panel.toggle()
+            Task { @MainActor in
+                // Panel is about to be shown (was hidden). Clear history
+                // unless app mode is enabled.
+                if !self.panel.isVisible, !self.settings.isAppModeEnabled {
+                    self.state.clearLLMState()
+                }
+                self.state.query = ""
+                self.state.results = []
+                self.state.isAppMode = self.settings.isAppModeEnabled && self.panel.frame.width > 900
+                self.panel.toggle()
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 if let tf = self.findTextField(in: self.panel.contentView) {
                     self.panel.makeFirstResponder(tf)

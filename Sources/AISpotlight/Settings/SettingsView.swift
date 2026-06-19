@@ -177,6 +177,14 @@ struct SettingsView: View {
                     Text("When enabled, a SQLite FTS5 backend participates in the fan-out alongside MDQuery. Add folders in \"Indexed Folders\" below to populate the index. The SyncService scans enrolled paths every 60 seconds.")
                         .font(.caption).foregroundStyle(.tertiary)
                 }
+                Section("App Mode") {
+                    Toggle("Enable app mode (resizable panel keeps conversation history)",
+                           isOn: $store.isAppModeEnabled)
+                        .help("When enabled, resizing the panel beyond 900px preserves chat history between sessions. Otherwise, history is cleared each time you reopen.")
+                    Text("In app mode, the panel remembers your conversation when closed and reopened. Resize the panel wider than 900px to activate. Memory target: ~500 MB.")
+                        .font(.caption).foregroundStyle(.tertiary)
+                }
+
                 Section("Indexed Folders") {
                     // Step-4: user-managed list of folders to index
                     // in the SQLite augmentation backend. The SyncService
