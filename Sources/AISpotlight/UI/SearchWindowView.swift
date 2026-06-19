@@ -7,9 +7,18 @@ struct SearchWindowView: View {
     @ObservedObject var state: AppState
 
     var body: some View {
+        if state.isAppMode {
+            chatMode
+        } else {
+            spotlightMode
+        }
+    }
+
+    // MARK: - Spotlight Mode (default)
+
+    private var spotlightMode: some View {
         ZStack {
             // ── Apple Intelligence Bezel Glow ──
-            // Only active when AI is thinking or has a reply
             if state.isLLMBusy || state.llmReply != nil {
                 BezelGlowView(
                     isActive: true,
@@ -72,6 +81,183 @@ struct SearchWindowView: View {
         .animation(.spring(response: 0.32, dampingFraction: 0.9), value: state.results.isEmpty)
         .animation(.spring(response: 0.32, dampingFraction: 0.9), value: state.isLLMBusy)
         .animation(.easeInOut(duration: 0.6), value: state.llmReply != nil)
+    }
+
+    // MARK: - Chat Mode (wide panel)
+
+    private var chatMode: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Text("AI Spotlight")
+                    .font(.system(size: 14, weight: .semibold))
+                Spacer()
+                Button {
+                    state.chatInput = ""
+                    state.clearLLMState()
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.tertiary)
+                .help("Clear conversation")
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
+
+            dividerLine
+
+            // Conversation history
+            ScrollViewReader { proxy in
+                ScrollView(.vertical) {
+                    LazyVStack(spacing: 12) {
+                        if state.llmHistory.isEmpty && state.llmReply == nil {
+                            VStack(spacing: 8) {
+                                Image(systemName: "sparkles")
+                                    .font(.system(size: 22))
+                                    .foregroundStyle(.tertiary)
+                                Text("Ask me anything")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 60)
+                        }
+
+                        ForEach(Array(state.llmHistory.enumerated()), id: \.offset) { _, entry in
+                            messageBubble(entry)
+                        }
+
+                        // Current reply
+                        if let reply = state.llmReply, !reply.isEmpty {
+                            HStack {
+                                Text(reply)
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(.primary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+
+                        // Thinking indicator
+                        if state.isLLMBusy {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .scaleEffect(0.5)
+                                Text("Thinking...")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.tertiary)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 16)
+                        }
+
+                        // Tool trace
+                        if !state.toolTrace.isEmpty {
+                            ForEach(state.toolTrace, id: \.self) { entry in
+                                HStack(spacing: 4) {
+                                    Image(systemName: "gearshape.2")
+                                        .font(.system(size: 8))
+                                    Text(entry)
+                                        .font(.system(size: 10))
+                                }
+                                .foregroundStyle(.purple.opacity(0.5))
+                                .padding(.horizontal, 16)
+                            }
+                        }
+
+                        Color.clear.frame(height: 1).id("bottom")
+                    }
+                    .padding(.vertical, 12)
+                }
+                .onChange(of: state.llmReply) { _, _ in
+                    withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                }
+                .onChange(of: state.isLLMBusy) { _, _ in
+                    withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                }
+            }
+
+            dividerLine
+
+            // Chat input at bottom
+            HStack(spacing: 8) {
+                TextField("Type a message...", text: $state.chatInput)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.primary.opacity(0.05))
+                    )
+                    .onSubmit {
+                        sendChatMessage()
+                    }
+
+                Button {
+                    sendChatMessage()
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle(state.chatInput.isEmpty ? Color.gray.opacity(0.5) : Color.purple)
+                }
+                .buttonStyle(.plain)
+                .disabled(state.chatInput.isEmpty || state.isLLMBusy)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+        }
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .strokeBorder(Color.white.opacity(0.08))
+        )
+        .shadow(color: .black.opacity(0.18), radius: 30, x: 0, y: 8)
+        .sheet(isPresented: .init(
+            get: { state.pendingConsent != nil },
+            set: { if !$0 { state.pendingConsent = nil } }
+        )) {
+            consentDialog
+        }
+    }
+
+    private func sendChatMessage() {
+        let msg = state.chatInput.trimmingCharacters(in: .whitespaces)
+        guard !msg.isEmpty else { return }
+        state.chatInput = ""
+        state.query = msg
+        Task { await state.activate() }
+    }
+
+    private func messageBubble(_ entry: LLMConversationService.HistoryEntry) -> some View {
+        HStack {
+            if entry.role == .user {
+                Spacer(minLength: 60)
+            }
+            Text(entry.text)
+                .font(.system(size: 13))
+                .foregroundStyle(entry.role == .user ? .white : .primary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(entry.role == .user
+                            ? Color.purple.opacity(0.8)
+                            : Color.primary.opacity(0.05))
+                )
+            if entry.role == .assistant {
+                Spacer(minLength: 60)
+            }
+        }
+        .padding(.horizontal, 16)
     }
 
     // MARK: - Divider

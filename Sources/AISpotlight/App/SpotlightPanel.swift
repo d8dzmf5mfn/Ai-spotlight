@@ -6,7 +6,7 @@ final class SpotlightPanel: NSPanel {
         let contentRect = NSRect(x: 0, y: 0, width: 720, height: 400)
         super.init(
             contentRect: contentRect,
-            styleMask: [.borderless, .resizable],
+            styleMask: [.borderless, .resizable, .fullSizeContentView],
             backing: .buffered, defer: false
         )
         self.isFloatingPanel = true
@@ -20,6 +20,9 @@ final class SpotlightPanel: NSPanel {
         self.hidesOnDeactivate = false
         // Scale-away on order-out for a polished dismissal
         self.animationBehavior = .documentWindow
+        // Allow wider panel for app mode
+        self.minSize = NSSize(width: 340, height: 300)
+        self.maxSize = NSSize(width: 1200, height: 800)
     }
 
     override var canBecomeKey: Bool { true }

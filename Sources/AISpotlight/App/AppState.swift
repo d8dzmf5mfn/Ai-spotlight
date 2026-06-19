@@ -108,6 +108,8 @@ final class AppState: ObservableObject {
     @Published var llmReplyPaths: [URL] = []
     /// True when panel is in app mode (wide enough to preserve history).
     @Published var isAppMode: Bool = false
+    /// Chat input field for app/chat mode.
+    @Published var chatInput: String = ""
 
     /// Phase 4.4: name of the tool currently running, if any.
     /// Set by runLLMAsk before the tool handler runs, cleared
