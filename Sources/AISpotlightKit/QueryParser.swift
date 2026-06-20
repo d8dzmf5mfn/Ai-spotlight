@@ -118,7 +118,10 @@ public enum QueryParser {
         // stay in the multi-token land and go to matchFile
         // (which may return .findFile or .unknown).
         let tokenCount = raw.split(separator: " ", omittingEmptySubsequences: true).count
-        if tokenCount == 1 && !raw.isEmpty {
+        // Phase 6.2: single-token ASCII queries ("Safari", "Terminal")
+        // default to openApp. Non-ASCII single tokens (Chinese/Japanese/etc.)
+        // are unlikely to be app names, so fall through to file search.
+        if tokenCount == 1 && !raw.isEmpty && raw.allSatisfy({ $0.isASCII }) {
             return .openApp(name: raw)
         }
         return nil
@@ -165,7 +168,19 @@ public enum QueryParser {
         if dateFilter != nil || kind != nil || hasFindVerb {
             return .findFile(name: extractName(raw), dateFilter: dateFilter, kind: kind)
         }
+        // Phase 6.2: non-ASCII queries (Chinese/Japanese/etc.) without a
+        // recognized verb should search as .findFile instead of .unknown,
+        // because all file providers skip .unknown. ASCII queries like
+        // "hello world" remain .unknown so the LLM handles them.
+        if !raw.isEmpty, raw.contains(where: { !$0.isASCII }) {
+            return .findFile(name: extractName(raw) ?? raw, dateFilter: nil, kind: nil, terms: extractTerms(raw))
+        }
         return .unknown(raw: raw)
+    }
+
+    /// Split a multi-word query into search terms for content search.
+    private static func extractTerms(_ raw: String) -> [String] {
+        return raw.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
     }
 
     /// Find a filename token: a word containing a dot, with trailing punctuation stripped.

@@ -341,6 +341,12 @@ final class AppState: ObservableObject {
         if !Task.isCancelled {
             self.results = r
             self.selection = r.isEmpty ? nil : 0
+            // Update emptyMessage to give user feedback when search finds nothing
+            if r.isEmpty && !q.isEmpty {
+                self.emptyMessage = "No results for \"\(q)\""
+            } else {
+                self.emptyMessage = "Type to search."
+            }
         }
 
         // Phase 4.2.x + 4.2.5: populate the LLM context
