@@ -12,6 +12,14 @@ public final class FileSystemProvider: SearchProvider, @unchecked Sendable {
         let query = buildQuery(name: name, date: date, kind: kind)
         guard !query.isEmpty else { return [] }
 
+        // Phase 6.2: CJK characters crash MDQuery on macOS 27 beta.
+        // Skip MDQuery entirely for CJK queries — rely on SQLiteBackend's
+        // LIKE fallback and FileSystemAdapter's FileManager enumeration.
+        if let n = name, CJKUtils.containsCJK(n) {
+            Log.write("[FileSystemProvider] CJK query '\(n)': skipping MDQuery to avoid macOS beta crash")
+            return []
+        }
+
         // B1: don't force-unwrap. MDQueryCreate returns NULL on bad syntax.
         guard let mdq = MDQueryCreate(kCFAllocatorDefault, query as CFString, nil, nil) else {
             return []

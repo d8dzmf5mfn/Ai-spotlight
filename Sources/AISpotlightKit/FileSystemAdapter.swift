@@ -196,7 +196,14 @@ public final class FileSystemAdapter: @unchecked Sendable {
     }
 
     /// Internal Spotlight search via MDQuery.
+    /// CJK queries are SKIPPED — MDQuery predicate parser crashes with
+    /// Chinese characters on macOS 27 beta (SIGSEGV at MDQueryExecute).
     private static func spotlightSearch(query: String, limit: Int) -> [SearchResult] {
+        // Phase 6.2: CJK characters crash MDQuery on macOS beta. Skip.
+        if CJKUtils.containsCJK(query) {
+            return []
+        }
+
         // Escape single quotes for MDQuery
         let escaped = query.replacingOccurrences(of: "'", with: "\\'")
         let mdQueryStr = "kMDItemDisplayName == '*\(escaped)*'cd"  // cd = case+diacritic insensitive

@@ -45,33 +45,42 @@ public final class SearchOrchestrator: @unchecked Sendable {
     /// (verified 2026-06-17) and it passes the tagged buckets
     /// straight to `ResultMerger.merge(_:)`.
     public func run(intent: Intent) async -> [(ProviderID, [SearchResult])] {
-        // Step-3: route decision filters providers based on intent.
-        // This avoids unnecessary Spotlight/SQLite queries (e.g.
-        // no point searching files for an app launch).
-        let route = RouteDecision.decide(for: intent)
+        // Phase 6.2: SearchRouter determines which provider mode to use
+        // (single active provider, not all-at-once).
+        let mode = SearchRouter.route(for: intent)
         
         // Pairs each provider with the id it should be tagged as.
-        // Only includes providers that match the route decision.
+        // Only includes providers that match the search mode.
         let pairs: [(SearchProvider, ProviderID)] = providers.compactMap { p in
             let id: ProviderID
             switch p.name {
-            case "FileSystem":       id = .fileSystem
-            case "Content":          id = .contentSearch
-            case "Apps":             id = .app
-            case "SQLiteAugmentation": id = .sqliteAugmentation
-            default:                 id = .fileSystem
+            case "FileSystem":            id = .fileSystem
+            case "Content":               id = .contentSearch
+            case "Apps":                  id = .app
+            case "SQLiteAugmentation":    id = .sqliteAugmentation
+            default:                      id = .fileSystem
             }
-            // Filter by route decision
-            switch id {
-            case .fileSystem, .contentSearch, .sqliteAugmentation:
-                guard route == .all || route == .filesOnly else { return nil }
-            case .app:
-                guard route == .all || route == .appsOnly else { return nil }
+            // Phase 6.2: filter by SearchRouter mode (single active provider)
+            switch mode {
+            case .sqliteOnly:
+                // Only SQLite backend for CJK queries
+                guard id == .sqliteAugmentation else { return nil }
+            case .appOnly:
+                // Only app search
+                guard id == .app else { return nil }
+            case .mdQueryOnly:
+                // Only FileSystem (MDQuery) — skip ContentSearch and SQLite
+                guard id == .fileSystem else { return nil }
+            case .hybrid:
+                // FileSystem + ContentSearch + SQLite for non-CJK file search
+                guard id == .fileSystem || id == .contentSearch || id == .sqliteAugmentation else { return nil }
+            case .none:
+                return nil
             }
             return (p, id)
         }
         guard !pairs.isEmpty else { return [] }
-        
+
         return await withTaskGroup(of: (ProviderID, [SearchResult]).self) { group -> [(ProviderID, [SearchResult])] in
             for (p, id) in pairs {
                 group.addTask { (id, await p.search(intent: intent)) }

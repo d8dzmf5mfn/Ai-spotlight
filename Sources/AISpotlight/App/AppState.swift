@@ -45,6 +45,8 @@ final class AppState: ObservableObject {
     @Published var results: [SearchResult] = []
     @Published var selection: Int? = 0
     @Published var isLoading: Bool = false
+    /// Generation token to prevent stale deferred state from cancelled tasks.
+    private var searchGeneration: UUID = UUID()
     @Published var placeholder: String = "Search files, apps, or ask AI…"
     @Published var emptyMessage: String = "Type to search."
 
@@ -320,7 +322,10 @@ final class AppState: ObservableObject {
     }
 
     private func runSearch(_ q: String) async {
-        isLoading = true; defer { isLoading = false }
+        let gen = UUID()
+        searchGeneration = gen
+        isLoading = true
+        defer { if searchGeneration == gen { isLoading = false } }
 
         // Special commands bypass the regular search/AI pipeline. We check
         // them first so they work even when "settings" matches some file
