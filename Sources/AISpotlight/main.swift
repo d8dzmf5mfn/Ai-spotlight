@@ -212,7 +212,8 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
 // pipeline.
 var searchProviders: [any SearchProvider] = [
     FileSystemProvider(),
-    FileSystemAdapterProvider(),  // Phase 6.2: cloud-storage fallback (OneDrive, iCloud, etc.)
+    // FileSystemAdapterProvider removed: MDQuery with Chinese chars crashes on macOS 27 beta.
+    // Chinese search is handled by SQLiteBackend LIKE fallback.
     AppProvider(),
     contentProvider,
 ]
