@@ -196,15 +196,24 @@ public final class FileSystemAdapter: @unchecked Sendable {
     }
 
     /// Internal Spotlight search via MDQuery.
+    /// Uses the same memory management pattern as FileSystemProvider.
     private static func spotlightSearch(query: String, limit: Int) -> [SearchResult] {
-        // Escape single quotes
+        // Escape single quotes for MDQuery
         let escaped = query.replacingOccurrences(of: "'", with: "\\'")
         let mdQueryStr = "kMDItemDisplayName == '*\(escaped)*'cd"  // cd = case+diacritic insensitive
 
         guard let mdq = MDQueryCreate(kCFAllocatorDefault, mdQueryStr as CFString, nil, nil) else {
             return []
         }
-        defer { _ = Unmanaged.passUnretained(mdq).autorelease() }
+        // CRITICAL: defer blocks execute in LIFO order — release (declared FIRST, runs LAST)
+        // must be declared BEFORE stop so that stop runs first on scope exit.
+        defer {
+            let raw = Unmanaged.passUnretained(mdq).toOpaque()
+            Unmanaged<CFTypeRef>.fromOpaque(raw).release()
+        }
+        defer {
+            MDQueryStop(mdq)
+        }
 
         MDQueryExecute(mdq, CFOptionFlags(kMDQuerySynchronous.rawValue))
         let count = min(MDQueryGetResultCount(mdq), limit)

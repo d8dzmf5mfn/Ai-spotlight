@@ -105,8 +105,69 @@ public final class SQLiteBackend: SearchProvider, @unchecked Sendable {
             index += 1
         }
         Log.write("[SQLiteBackend] search: found \(results.count) results for terms=\(terms)")
+
+        // Phase 6.2: FTS5 with unicode61 tokenizer cannot handle CJK.
+        // Fall back to LIKE query when FTS5 returns empty for non-ASCII terms.
+        if results.isEmpty, terms.contains(where: { $0.unicodeScalars.contains(where: { !$0.isASCII }) }) {
+            let likeResults = fallbackCJKSearch(db: db, terms: terms, limit: limit)
+            Log.write("[SQLiteBackend] CJK fallback: found \(likeResults.count) results")
+            return likeResults
+        }
+
         return results
     }
+
+    /// Phase 6.2: LIKE-based fallback for CJK queries that FTS5 cannot handle.
+    private func fallbackCJKSearch(db: OpaquePointer?, terms: [String], limit: Int) -> [SearchResult] {
+        guard let db else { return [] }
+
+        var results: [SearchResult] = []
+        var index = 0
+        var seen = Set<String>()
+
+        for term in terms where !term.isEmpty {
+            let likePattern = "%" + term + "%"
+            let sql = "SELECT path, filename, last_modified, file_type FROM files WHERE (filename LIKE ?1 OR path LIKE ?1) AND is_deleted = 0 LIMIT ?"
+
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                sqlite3_finalize(stmt)
+                continue
+            }
+
+            let patternNS = likePattern as NSString
+            sqlite3_bind_text(stmt, 1, patternNS.utf8String, -1, nil)
+            sqlite3_bind_int(stmt, 2, Int32(clamping: limit))
+
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                guard results.count < limit else { break }
+                guard let pathC = sqlite3_column_text(stmt, 0) else { continue }
+                let path = String(cString: pathC)
+                guard seen.insert(path).inserted else { continue }
+
+                let url = URL(fileURLWithPath: path)
+                let score = Double(limit - index) / Double(limit)
+
+                results.append(SearchResult(
+                    title: url.lastPathComponent,
+                    subtitle: url.deletingLastPathComponent().path,
+                    iconSystemName: "doc.text.magnifyingglass",
+                    url: url,
+                    kind: .file,
+                    score: score,
+                    contentSnippet: "CJK LIKE match"
+                ))
+                index += 1
+            }
+            sqlite3_finalize(stmt)
+
+            if results.count >= limit { break }
+        }
+
+        return results
+    }
+
+    // MARK: - FTS5 Query Translation
 
     // MARK: - FTS5 Query Translation
 
