@@ -239,6 +239,14 @@ public final class OpenAICompatibleProvider: AIProvider, @unchecked Sendable {
             struct Choice: Decodable {
                 struct Delta: Decodable {
                     let content: String?
+                    // Some models (DeepSeek R1) send reasoning in a separate field.
+                    // We decode (and ignore) it so Swift doesn't error on unknown keys.
+                    let reasoningContent: String?
+                    
+                    enum CodingKeys: String, CodingKey {
+                        case content
+                        case reasoningContent = "reasoning_content"
+                    }
                 }
                 let delta: Delta?
             }
@@ -357,7 +365,16 @@ public final class OpenAICompatibleProvider: AIProvider, @unchecked Sendable {
 
     private struct ChatResponse: Decodable, Sendable {
         struct Choice: Decodable, Sendable {
-            struct Message: Decodable, Sendable { let content: String }
+            struct Message: Decodable, Sendable {
+                let content: String
+                // Explicitly ignore reasoning_content from models like DeepSeek
+                let reasoningContent: String?
+                
+                enum CodingKeys: String, CodingKey {
+                    case content
+                    case reasoningContent = "reasoning_content"
+                }
+            }
             let message: Message
         }
         let choices: [Choice]

@@ -34,7 +34,7 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
     public init(id: UUID = UUID(), title: String = "", messages: [Message] = [], createdAt: Date = Date(), updatedAt: Date = Date()) {
         self.id = id
         self.title = title
-        self.messages = messages
+        self.messages = messages.count > 100 ? Array(messages.suffix(100)) : messages
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -59,6 +59,10 @@ public actor ConversationStore {
             var updated = conversation; updated.updatedAt = Date(); conversations[idx] = updated
         } else {
             var new = conversation; new.updatedAt = Date(); conversations.append(new)
+            if conversations.count > 50 {
+                conversations.sort { $0.updatedAt > $1.updatedAt }
+                conversations = Array(conversations.prefix(50))
+            }
         }
         Self.persist(conversations, to: fileURL)
     }

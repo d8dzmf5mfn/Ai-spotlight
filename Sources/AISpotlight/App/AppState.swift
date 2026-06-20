@@ -300,6 +300,25 @@ final class AppState: ObservableObject {
         Task { [weak self] in await self?.conversationStore?.deleteAll() }
     }
 
+    /// Trim memory when approaching the 500MB limit.
+    func trimMemory() {
+        if llmHistory.count > 6 {
+            llmHistory.removeFirst(llmHistory.count - 6)
+        }
+        if !isLLMBusy, let reply = llmReply, reply.count > 2000 {
+            llmReply = String(reply.suffix(2000))
+        }
+        if savedConversations.count > 20 {
+            let excess = savedConversations.count - 20
+            let toDelete = Array(savedConversations.suffix(excess))
+            for conv in toDelete {
+                savedConversations.removeAll { $0.id == conv.id }
+                Task { [weak self] in await self?.conversationStore?.delete(conv.id) }
+            }
+        }
+        Log.write("[AppState] trimMemory: llmHistory=\(llmHistory.count), savedConversations=\(savedConversations.count)")
+    }
+
     private func runSearch(_ q: String) async {
         isLoading = true; defer { isLoading = false }
 

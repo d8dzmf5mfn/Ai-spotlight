@@ -92,6 +92,7 @@ struct SearchWindowView: View {
                 sidebarView
                     .frame(width: 200)
                     .background(Color.primary.opacity(0.03))
+                    .transition(.move(edge: .leading).combined(with: .opacity))
             }
 
             // Main chat area
@@ -111,7 +112,7 @@ struct SearchWindowView: View {
                             ForEach(Array(state.llmHistory.enumerated()), id: \.offset) { _, entry in
                                 chatMessageBubble(entry.role == .user ? .user : .assistant, entry.text)
                             }
-                            if let reply = state.llmReply, !reply.isEmpty {
+                            if state.isLLMBusy, let reply = state.llmReply, !reply.isEmpty {
                                 chatMessageBubble(.assistant, reply)
                             }
                             if state.isLLMBusy {
@@ -138,6 +139,7 @@ struct SearchWindowView: View {
                     }
                     .onChange(of: state.llmReply) { _, _ in withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
                     .onChange(of: state.isLLMBusy) { _, _ in withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
+                    .onChange(of: state.llmHistory.count) { _, _ in withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
                 }
 
                 dividerLine
@@ -467,6 +469,8 @@ struct SearchWindowView: View {
                 }
             }
         }
+        // Show user message immediately (don't wait for AI reply)
+        state.llmHistory.append(.init(role: .user, text: finalQuery))
         state.query = finalQuery
         Task { await state.activate() }
     }
