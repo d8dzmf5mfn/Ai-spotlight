@@ -212,6 +212,7 @@ final class AppLauncher: NSObject, NSApplicationDelegate {
 // pipeline.
 var searchProviders: [any SearchProvider] = [
     FileSystemProvider(),
+    FileSystemAdapterProvider(),  // Phase 6.2: cloud-storage fallback (OneDrive, iCloud, etc.)
     AppProvider(),
     contentProvider,
 ]
